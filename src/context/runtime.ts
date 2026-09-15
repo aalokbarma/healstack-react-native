@@ -9,13 +9,42 @@ import type { RuntimeContextProvider } from '../runtime/RuntimeContextProvider';
 import { getDefaultRuntimeContextProvider } from '../runtime/defaultProvider';
 import { normalizeRuntimeContexts } from '../runtime/normalizeRuntimeContext';
 import type { RuntimeDiagnostics } from '../runtime/types';
+import { debug } from '../utils/logger';
 import { safe } from '../utils/safe';
 
 let providerOverride: RuntimeContextProvider | undefined;
+let warmedUp = false;
 
 /** Test hook — override runtime context collection. */
 export function setRuntimeContextProvider(next: RuntimeContextProvider | undefined): void {
   providerOverride = next;
+  warmedUp = false;
+}
+
+/**
+ * Eagerly initialize runtime context collection during SDK init.
+ * Safe to call repeatedly — never throws.
+ */
+export function warmupRuntimeContext(): void {
+  safe(
+    () => {
+      void getRuntimeContexts();
+      warmedUp = true;
+      debug('runtime context warmed up');
+    },
+    undefined,
+    'warmupRuntimeContext',
+  );
+}
+
+/** Test helper — whether warmup has completed at least once since last reset. */
+export function isRuntimeContextWarmedUp(): boolean {
+  return warmedUp;
+}
+
+/** Test helper — clear warmup flag (does not clear provider override). */
+export function resetRuntimeContextWarmup(): void {
+  warmedUp = false;
 }
 
 /**

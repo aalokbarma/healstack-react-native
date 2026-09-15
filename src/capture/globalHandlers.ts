@@ -49,16 +49,18 @@ export class GlobalErrorHandlerManager {
     }
 
     const errorUtils = getErrorUtils();
-    if (errorUtils?.setGlobalHandler) {
-      if (this.previousHandler) {
-        errorUtils.setGlobalHandler(this.previousHandler);
-      } else if (this.ourHandler) {
-        // Restore to our handler's delegate chain head only if still ours.
-        const current = errorUtils.getGlobalHandler?.();
-        if (current === this.ourHandler) {
+    if (errorUtils?.setGlobalHandler && this.ourHandler) {
+      const current = errorUtils.getGlobalHandler?.();
+      // Only restore if we still own the slot — never clobber a newer wrapper.
+      if (current === this.ourHandler) {
+        if (this.previousHandler) {
+          errorUtils.setGlobalHandler(this.previousHandler);
+        } else {
           warn('restoring ErrorUtils without previous handler');
           errorUtils.setGlobalHandler(() => undefined);
         }
+      } else {
+        debug('ErrorUtils handler changed by another party; leaving current handler in place');
       }
     }
 

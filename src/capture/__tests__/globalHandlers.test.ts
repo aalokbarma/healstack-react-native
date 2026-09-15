@@ -76,15 +76,20 @@ describe('GlobalErrorHandlerManager', () => {
     expect(getErrorUtils()).toBeUndefined();
   });
 
-  it('uninstalls cleanly when there was no previous handler', () => {
-    mockErrorUtils.handler = undefined;
+  it('does not clobber a newer ErrorUtils handler on uninstall', () => {
+    const previous = jest.fn();
+    mockErrorUtils.handler = previous;
 
     const manager = new GlobalErrorHandlerManager();
     manager.install(() => undefined);
-    const installed = mockErrorUtils.handler;
-    expect(installed).toBeDefined();
+    const ours = mockErrorUtils.handler;
+
+    const interloper = jest.fn();
+    mockErrorUtils.handler = interloper;
 
     manager.uninstall();
-    expect(mockErrorUtils.handler).not.toBe(installed);
+    expect(mockErrorUtils.handler).toBe(interloper);
+    expect(mockErrorUtils.handler).not.toBe(ours);
+    expect(mockErrorUtils.handler).not.toBe(previous);
   });
 });

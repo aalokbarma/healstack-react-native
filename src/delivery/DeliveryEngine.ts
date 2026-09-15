@@ -89,6 +89,11 @@ export class DeliveryEngine {
     return this.flushInFlight !== undefined;
   }
 
+  /** Whether an automatic flush timer is currently armed (tests / diagnostics). */
+  get hasScheduledFlush(): boolean {
+    return this.timer !== undefined;
+  }
+
   /**
    * Non-blocking hint after enqueue — may schedule a flush when the batch
    * is full or a fatal event arrived. Never awaits.

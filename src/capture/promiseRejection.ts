@@ -21,6 +21,9 @@ export class PromiseRejectionManager {
   private strategy: PromiseRejectionInstallResult['strategy'] = 'none';
   private webListener: WebRejectionListener | undefined;
   private hermesInstalled = false;
+  /** Invalidated on uninstall so orphaned Hermes callbacks become no-ops. */
+  private generation = 0;
+  private active = false;
 
   install(onRejection: UnhandledRejectionCallback): PromiseRejectionInstallResult {
     if (this.installed) {
@@ -31,9 +34,15 @@ export class PromiseRejectionManager {
     if (hermes?.hasPromise?.() && hermes.enablePromiseRejectionTracker) {
       // Hermes allows one tracker — we take the slot and document the conflict.
       try {
+        const generation = ++this.generation;
+        this.active = true;
         hermes.enablePromiseRejectionTracker({
           allRejections: true,
           onUnhandled: (_id, rejection) => {
+            // Hermes has no uninstall API — generation/active guards stop work after close.
+            if (!this.active || generation !== this.generation) {
+              return;
+            }
             safeRun(() => onRejection(rejection), 'PromiseRejection.hermes');
           },
           onHandled: () => {
@@ -51,6 +60,7 @@ export class PromiseRejectionManager {
             'Hermes supports one promise rejection tracker; other SDKs may conflict.',
         };
       } catch (error) {
+        this.active = false;
         warn('failed to install Hermes promise rejection tracker', error);
       }
     }
@@ -63,6 +73,7 @@ export class PromiseRejectionManager {
       g.addEventListener('unhandledrejection', this.webListener);
       this.strategy = 'web';
       this.installed = true;
+      this.active = true;
       debug('installed web unhandledrejection listener');
       return { installed: true, strategy: 'web' };
     }
@@ -73,6 +84,8 @@ export class PromiseRejectionManager {
 
   uninstall(): void {
     if (!this.installed) {
+      this.active = false;
+      this.generation += 1;
       return;
     }
 
@@ -84,11 +97,13 @@ export class PromiseRejectionManager {
       this.webListener = undefined;
     }
 
-    // Hermes has no uninstall API — documented limitation.
+    // Hermes has no uninstall API — invalidate callbacks so they no-op after close.
     if (this.hermesInstalled) {
-      debug('Hermes promise rejection tracker cannot be uninstalled');
+      debug('Hermes promise rejection tracker deactivated (engine has no uninstall API)');
     }
 
+    this.active = false;
+    this.generation += 1;
     this.installed = false;
     this.strategy = 'none';
     this.hermesInstalled = false;
@@ -97,6 +112,11 @@ export class PromiseRejectionManager {
 
   isInstalled(): boolean {
     return this.installed;
+  }
+
+  /** True while callbacks may deliver events (false after uninstall). */
+  isActive(): boolean {
+    return this.active;
   }
 
   getStrategy(): PromiseRejectionInstallResult['strategy'] {

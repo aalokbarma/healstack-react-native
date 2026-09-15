@@ -32,6 +32,7 @@ await HealStack.flush();
 await HealStack.close();
 ```
 
+`init()` is idempotent. `close()` stops the delivery scheduler, removes global handlers, flushes pending events when safe, and releases resources. `init()` → `close()` → `init()` is supported without leaked timers, handlers, or duplicate workers.
 ### Contextual metadata
 
 Attach optional user identity and string tags to every captured event:

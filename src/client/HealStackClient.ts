@@ -13,6 +13,7 @@ import { prepareUserContext } from '../metadata/prepareUserContext';
 import { AutoCaptureManager } from '../capture/globalHandlersManager';
 import type { ResolvedOptions } from '../config/types';
 import { Scope } from '../context/Scope';
+import { warmupRuntimeContext } from '../context/runtime';
 import { DeliveryEngine } from '../delivery/DeliveryEngine';
 import { shouldFlushAfterEnqueue } from '../delivery/Batcher';
 import { normalizeStackTrace } from '../normalization/normalizeStackTrace';
@@ -54,6 +55,7 @@ export interface HealStackClientDeps {
 
 export class HealStackClient {
   private closed = false;
+  private closeInFlight: Promise<boolean> | undefined;
   private processing = false;
   private captureDepth = 0;
   private inAutoCapture = false;
@@ -105,9 +107,12 @@ export class HealStackClient {
     configureLogger({ debug: options.debug });
     setInternalErrorHandler(options.onInternalError);
 
+    // Warm runtime context before capture so first events are not blocked on discovery.
+    warmupRuntimeContext();
+
     if (options.enabled) {
-      this.installAutoCapture();
-      this.delivery.start();
+      safeRun(() => this.installAutoCapture(), 'client.installAutoCapture');
+      safeRun(() => this.delivery.start(), 'client.startDelivery');
     }
 
     debug('client initialized', {
@@ -335,28 +340,58 @@ export class HealStackClient {
   }
 
   /**
-   * Flush remaining events, mark closed, clear scope. Idempotent. Never rejects.
+   * Stop schedulers, remove handlers, flush pending events, release resources.
+   * Idempotent and safe under concurrent callers. Never rejects.
    */
   async close(timeoutMs = 5_000): Promise<boolean> {
-    return safeAsync(
-      async () => {
-        if (this.closed) {
-          return true;
-        }
-        this.autoCapture.uninstall();
-        const flushed = await this.delivery.shutdown(timeoutMs);
-        await this.queue.close();
-        this.closed = true;
-        this.dedupe.clear();
-        safeRun(() => this.scope.clear(), 'close.clearScope');
-        debug('client closed');
-        setInternalErrorHandler(undefined);
-        resetLogger();
-        return flushed;
+    if (this.closed) {
+      return true;
+    }
+    if (this.closeInFlight) {
+      return this.closeInFlight;
+    }
+
+    const pending = this.runClose(timeoutMs).then(
+      (ok) => {
+        this.closeInFlight = undefined;
+        return ok;
       },
-      true,
-      'close',
+      () => {
+        this.closeInFlight = undefined;
+        return false;
+      },
     );
+    this.closeInFlight = pending;
+    return pending;
+  }
+
+  private async runClose(timeoutMs: number): Promise<boolean> {
+    // Become inactive immediately so captures / interval work stop accepting new work.
+    this.closed = true;
+
+    let flushed = true;
+    try {
+      // 1. Remove global handlers first (stop new auto-captures).
+      safeRun(() => this.autoCapture.uninstall(), 'close.uninstallHandlers');
+      // 2. Stop scheduled flushing, then flush pending events where safely possible.
+      flushed = await safeAsync(
+        () => this.delivery.shutdown(timeoutMs),
+        false,
+        'close.deliveryShutdown',
+      );
+      // 3. Release queue / storage resources.
+      await safeAsync(() => this.queue.close(), undefined, 'close.queue');
+    } finally {
+      // 4. Idempotent final teardown — must run even if flush/queue threw.
+      safeRun(() => this.delivery.stop(), 'close.deliveryStop');
+      safeRun(() => this.autoCapture.uninstall(), 'close.uninstallHandlersFinal');
+      safeRun(() => this.dedupe.clear(), 'close.dedupe');
+      safeRun(() => this.scope.clear(), 'close.clearScope');
+      setInternalErrorHandler(undefined);
+      resetLogger();
+      debug('client closed');
+    }
+    return flushed;
   }
 
   private getBreadcrumbPrepareOptions() {

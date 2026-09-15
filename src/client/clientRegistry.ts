@@ -40,6 +40,8 @@ export function initClient(rawOptions: HealStackOptions): void {
         return;
       }
 
+      // Drop any closed zombie reference before constructing a fresh client.
+      currentClient = undefined;
       currentClient = new HealStackClient(resolved);
     },
     undefined,
@@ -49,6 +51,7 @@ export function initClient(rawOptions: HealStackOptions): void {
 
 /**
  * Close and clear the global client. Never rejects.
+ * Always detaches the registry entry so re-init cannot be blocked by a zombie.
  */
 export async function closeClient(timeoutMs?: number): Promise<boolean> {
   return safeAsync(
@@ -57,11 +60,13 @@ export async function closeClient(timeoutMs?: number): Promise<boolean> {
       if (!client) {
         return true;
       }
-      const ok = await client.close(timeoutMs);
-      if (client.isClosed()) {
-        currentClient = undefined;
+      try {
+        return await client.close(timeoutMs);
+      } finally {
+        if (currentClient === client) {
+          currentClient = undefined;
+        }
       }
-      return ok;
     },
     true,
     'closeClient',
