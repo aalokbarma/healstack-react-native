@@ -50,8 +50,8 @@ export class DeliveryEngine {
   private readonly transport: Transport;
   private readonly maxBatchSize: number;
   private readonly flushIntervalMs: number;
-  private readonly onUnauthorized?: () => void;
-  private readonly isTransportDisabled?: () => boolean;
+  private readonly onUnauthorized: (() => void) | undefined;
+  private readonly isTransportDisabled: (() => boolean) | undefined;
 
   private flushInFlight: Promise<boolean> | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
