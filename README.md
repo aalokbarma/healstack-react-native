@@ -2,7 +2,7 @@
 
 HealStack application reliability SDK for React Native.
 
-**Status:** `0.1.0` — package foundation + configuration system. Lifecycle APIs initialize and validate safely; capture/delivery pipelines land in later phases.
+**Status:** `0.1.0` — package foundation, configuration, and client core. Capture → normalize → sanitize → queue → transport pipeline is live (HTTP ingest). Global handlers and persistence land later.
 
 ## Install
 
@@ -52,7 +52,7 @@ await HealStack.close();
 
 Invalid configuration fails safely: `init()` does not throw, and the SDK stays uninitialized.
 
-> Capture, queueing, and network delivery are not implemented yet. Capture calls are safe no-ops until those phases land.
+> Global error handlers and offline persistence land in later phases. Capture/flush/close are fully wired through the in-memory queue and HTTP transport.
 
 ## Supported React Native versions
 

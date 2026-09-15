@@ -28,4 +28,38 @@ declare class URL {
   readonly pathname: string;
   readonly search: string;
   readonly hash: string;
+  readonly username: string;
+  readonly password: string;
+  readonly searchParams: {
+    forEach(callback: (value: string, key: string) => void): void;
+    set(name: string, value: string): void;
+  };
+  toString(): string;
 }
+
+declare class AbortController {
+  readonly signal: AbortSignal;
+  abort(): void;
+}
+
+interface AbortSignal {
+  readonly aborted: boolean;
+}
+
+interface Response {
+  readonly status: number;
+  readonly ok: boolean;
+  readonly headers: {
+    get(name: string): string | null;
+  };
+}
+
+declare function fetch(
+  input: string,
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  },
+): Promise<Response>;

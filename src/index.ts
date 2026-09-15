@@ -60,126 +60,102 @@ export function isInitialized(): boolean {
   return safe(() => isClientInitialized(), false, 'isInitialized');
 }
 
-export function captureException(_error: unknown, _hint?: CaptureHint): string {
+export function captureException(error: unknown, hint?: CaptureHint): string {
   return safe(
     () => {
       const client = getClient();
       if (!client?.isEnabled()) {
         return '';
       }
-      // Capture pipeline lands in a later phase.
-      return '';
+      return client.captureException(error, hint);
     },
     '',
     'captureException',
   );
 }
 
-export function captureMessage(
-  _message: string,
-  _level?: SeverityLevel,
-  _hint?: CaptureHint,
-): string {
+export function captureMessage(message: string, level?: SeverityLevel, hint?: CaptureHint): string {
   return safe(
     () => {
       const client = getClient();
       if (!client?.isEnabled()) {
         return '';
       }
-      return '';
+      return client.captureMessage(message, level ?? 'info', hint);
     },
     '',
     'captureMessage',
   );
 }
 
-export function addBreadcrumb(_breadcrumb: BreadcrumbInput): void {
+export function addBreadcrumb(breadcrumb: BreadcrumbInput): void {
   safe(
     () => {
-      const client = getClient();
-      if (!client?.isEnabled()) {
-        return;
-      }
+      getClient()?.addBreadcrumb(breadcrumb);
     },
     undefined,
     'addBreadcrumb',
   );
 }
 
-export function setUser(_user: UserContext | null): void {
+export function setUser(user: UserContext | null): void {
   safe(
     () => {
-      const client = getClient();
-      if (!client?.isEnabled()) {
-        return;
-      }
+      getClient()?.setUser(user);
     },
     undefined,
     'setUser',
   );
 }
 
-export function setTag(_key: string, _value: TagValue): void {
+export function setTag(key: string, value: TagValue): void {
   safe(
     () => {
-      const client = getClient();
-      if (!client?.isEnabled()) {
-        return;
-      }
+      getClient()?.setTag(key, value);
     },
     undefined,
     'setTag',
   );
 }
 
-export function setTags(_tags: Record<string, TagValue>): void {
+export function setTags(tags: Record<string, TagValue>): void {
   safe(
     () => {
-      const client = getClient();
-      if (!client?.isEnabled()) {
-        return;
-      }
+      getClient()?.setTags(tags);
     },
     undefined,
     'setTags',
   );
 }
 
-export function setExtra(_key: string, _value: unknown): void {
+export function setExtra(key: string, value: unknown): void {
   safe(
     () => {
-      const client = getClient();
-      if (!client?.isEnabled()) {
-        return;
-      }
+      getClient()?.setExtra(key, value);
     },
     undefined,
     'setExtra',
   );
 }
 
-export function setContext(_key: string, _context: Record<string, unknown> | null): void {
+export function setContext(key: string, context: Record<string, unknown> | null): void {
   safe(
     () => {
-      const client = getClient();
-      if (!client?.isEnabled()) {
-        return;
-      }
+      getClient()?.setContext(key, context);
     },
     undefined,
     'setContext',
   );
 }
 
-export async function flush(_timeoutMs?: number): Promise<boolean> {
+export async function flush(timeoutMs?: number): Promise<boolean> {
   return safeAsync(
     async () => {
       const client = getClient();
       if (!client || client.isClosed()) {
         return true;
       }
-      // Queue flush lands in a later phase.
-      return true;
+      return client.flush(timeoutMs);
     },
     true,
     'flush',
@@ -187,14 +163,14 @@ export async function flush(_timeoutMs?: number): Promise<boolean> {
 }
 
 /**
- * Flush (later), tear down handlers, and clear the global client. Idempotent.
+ * Flush remaining work and tear down the client. Idempotent.
  */
 export async function close(timeoutMs?: number): Promise<boolean> {
   return closeClient(timeoutMs);
 }
 
 export function lastEventId(): string | undefined {
-  return safe(() => undefined, undefined, 'lastEventId');
+  return safe(() => getClient()?.lastEventId(), undefined, 'lastEventId');
 }
 
 /**
