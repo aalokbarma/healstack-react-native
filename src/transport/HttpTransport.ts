@@ -140,7 +140,7 @@ export class HttpTransport implements Transport {
     }
 
     const headers: Record<string, string> = {
-      ...this.options.transportHeaders,
+      ...sanitizeTransportHeaders(this.options.transportHeaders),
       'Content-Type': 'application/json',
       Accept: 'application/json',
       'X-HealStack-Key': this.options.apiKey,
@@ -204,25 +204,48 @@ function assertSecureEndpoint(
   }
 }
 
+/** Drop headers that should never be supplied by the host app (auth / cookies). */
+const BLOCKED_TRANSPORT_HEADERS = new Set([
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'x-healstack-key',
+  'proxy-authorization',
+]);
+
+function sanitizeTransportHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> {
+  if (!headers || typeof headers !== 'object') {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof key !== 'string' || typeof value !== 'string') {
+      continue;
+    }
+    if (BLOCKED_TRANSPORT_HEADERS.has(key.toLowerCase())) {
+      debug('transport: ignoring blocked transportHeaders key', key);
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
 async function validateAndMapResponse(response: HttpResponse): Promise<TransportResult> {
   const mapped = mapHttpStatus(response.status, response.headers.get('Retry-After'));
 
-  // Best-effort response body validation — never required for accept.
+  // Best-effort body sniff for debugging only — never downgrade an accepted 2xx.
+  // Ingest servers may return empty bodies, JSON objects, or simple acknowledgements.
   if (mapped.status === 'accepted' && typeof response.text === 'function') {
     try {
       const text = await response.text();
       if (text && text.length > 0) {
         try {
-          const parsed: unknown = JSON.parse(text);
-          if (parsed !== null && typeof parsed !== 'object') {
-            return {
-              status: 'malformed',
-              httpStatus: response.status,
-              message: 'invalid response body',
-            };
-          }
+          JSON.parse(text);
         } catch {
-          // Non-JSON success bodies are tolerated (202 may be empty).
+          // Non-JSON success bodies are tolerated (202 may be empty / plain text).
         }
       }
     } catch {

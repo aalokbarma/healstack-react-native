@@ -1,6 +1,8 @@
 /** Default metadata bounds — overridable via HealStackOptions where noted. */
 export const METADATA_DEFAULTS = {
   maxTags: 50,
+  maxExtraKeys: 50,
+  maxContextKeys: 20,
   maxTagKeyLength: 64,
   maxTagValueLength: 256,
   maxUserIdLength: 128,
@@ -10,6 +12,8 @@ export const METADATA_DEFAULTS = {
 
 export const METADATA_HARD_CAPS = {
   maxTags: 200,
+  maxExtraKeys: 200,
+  maxContextKeys: 50,
 } as const;
 
 /** Known user fields stored explicitly; extras are extensible but bounded. */

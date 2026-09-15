@@ -1,0 +1,36 @@
+{
+  "name": "healstack-rn-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Example React Native app that consumes @healstack/react-native as an external package.",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "typecheck": "tsc --noEmit",
+    "test": "jest --watchman=false",
+    "verify:package-entry": "node ./scripts/verify-package-entry.cjs"
+  },
+  "dependencies": {
+    "@healstack/react-native": "file:..",
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "expo": "~52.0.46",
+    "expo-status-bar": "~2.0.1",
+    "react": "18.3.1",
+    "react-native": "0.76.9"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.10",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.20.2",
+    "@types/react": "~18.3.12",
+    "babel-preset-expo": "~12.0.11",
+    "jest": "^29.7.0",
+    "jest-expo": "~52.0.6",
+    "typescript": "~5.3.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

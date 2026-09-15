@@ -16,6 +16,7 @@ import type {
 } from '../types/events';
 import type { SeverityLevel, TagValue, UserContext } from '../types/public';
 import { debug, warn } from '../utils/logger';
+import { createSafeObject, isDangerousKey } from '../utils/dangerousKeys';
 import {
   CIRCULAR_MARKER,
   MAX_DEPTH_MARKER,
@@ -189,7 +190,7 @@ function walk(
     return out;
   }
 
-  const out: Record<string, unknown> = {};
+  const out = createSafeObject();
   let entries: [string, unknown][];
   try {
     entries = Object.entries(value as Record<string, unknown>);
@@ -204,6 +205,9 @@ function walk(
       continue;
     }
     const [key, child] = entry;
+    if (isDangerousKey(key)) {
+      continue;
+    }
     try {
       if (isDeniedKey(key, deny)) {
         out[key] = REDACTED;

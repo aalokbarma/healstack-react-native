@@ -1,7 +1,14 @@
 /**
  * @healstack/react-native
  *
- * Public facade. Only symbols exported from this file are part of the public API.
+ * Public facade. Only symbols exported from this file are part of the supported public API.
+ *
+ * Quick start:
+ * ```ts
+ * import HealStack from '@healstack/react-native';
+ * HealStack.init({ apiKey: 'hs_live_…', endpoint: 'https://api.healstack.dev' });
+ * HealStack.captureException(error);
+ * ```
  */
 
 import { closeClient, getClient, initClient, isClientInitialized } from './client/clientRegistry';
@@ -18,6 +25,8 @@ import type {
 import { safe, safeAsync } from './utils/safe';
 import { SCHEMA_VERSION, SDK_NAME, SDK_VERSION } from './version';
 
+// --- Application-facing types (use these in app code) ---
+
 export type {
   Breadcrumb,
   BreadcrumbInput,
@@ -30,8 +39,19 @@ export type {
   UserContext,
 } from './types/public';
 
+/**
+ * Event shape passed to `beforeSend`.
+ * Prefer treating fields as read-mostly unless you intentionally rewrite the payload.
+ */
+export type { HealStackEvent } from './types/events';
+
+// --- Storage helpers ---
+
 export { createAsyncStorageAdapter, MemoryStorage } from './storage';
+/** @deprecated Prefer {@link HealStackStorage} in application typings. */
 export type { Storage, AsyncStorageLike } from './storage';
+
+// --- Advanced / wire types (protocol authors & beforeSend power users) ---
 
 export type {
   AppContext,
@@ -40,7 +60,6 @@ export type {
   EventType,
   ExceptionMechanism,
   ExceptionValue,
-  HealStackEvent,
   OsContext,
   RuntimeContext,
   SdkInfo,
@@ -50,20 +69,35 @@ export type {
 
 export type { IngestHeaders, IngestRequest, IngestResponse, IngestStatus } from './types/api';
 
+/** Ingest envelope schema version currently emitted by this SDK. */
 export { WIRE_SCHEMA_VERSION };
+/** @deprecated Prefer {@link WIRE_SCHEMA_VERSION} for ingest; kept for compatibility. */
 export { SCHEMA_VERSION, SDK_NAME, SDK_VERSION };
 
 /**
- * Initialize the SDK. Idempotent. Never throws.
+ * Initialize the SDK. Idempotent for equivalent options. Never throws.
+ * @returns `true` when the SDK is active after this call; `false` if configuration was rejected.
  */
-export function init(options: HealStackOptions): void {
-  safe(() => initClient(options), undefined, 'init');
+export function init(options: HealStackOptions): boolean {
+  return safe(
+    () => {
+      initClient(options);
+      return isClientInitialized();
+    },
+    false,
+    'init',
+  );
 }
 
+/** Whether a live client is initialized and not closed. */
 export function isInitialized(): boolean {
   return safe(() => isClientInitialized(), false, 'isInitialized');
 }
 
+/**
+ * Capture an exception or thrown value.
+ * @returns Event id, or `''` if the SDK is inactive / the event was suppressed.
+ */
 export function captureException(error: unknown, hint?: CaptureHint): string {
   return safe(
     () => {
@@ -78,6 +112,10 @@ export function captureException(error: unknown, hint?: CaptureHint): string {
   );
 }
 
+/**
+ * Capture a message event.
+ * @returns Event id, or `''` if the SDK is inactive.
+ */
 export function captureMessage(message: string, level?: SeverityLevel, hint?: CaptureHint): string {
   return safe(
     () => {
@@ -92,6 +130,7 @@ export function captureMessage(message: string, level?: SeverityLevel, hint?: Ca
   );
 }
 
+/** Add a breadcrumb to the current scope (FIFO-capped). */
 export function addBreadcrumb(breadcrumb: BreadcrumbInput): void {
   safe(
     () => {
@@ -102,6 +141,7 @@ export function addBreadcrumb(breadcrumb: BreadcrumbInput): void {
   );
 }
 
+/** Set or replace the current user context. Pass `null` to clear. */
 export function setUser(user: UserContext | null): void {
   safe(
     () => {
@@ -123,6 +163,7 @@ export function clearUser(): void {
   );
 }
 
+/** Set a string tag on the current scope. */
 export function setTag(key: string, value: TagValue): void {
   safe(
     () => {
@@ -133,6 +174,7 @@ export function setTag(key: string, value: TagValue): void {
   );
 }
 
+/** Set multiple string tags. */
 export function setTags(tags: Record<string, TagValue>): void {
   safe(
     () => {
@@ -165,6 +207,7 @@ export function clearTags(): void {
   );
 }
 
+/** Attach arbitrary extra data to the current scope (sanitized before send). */
 export function setExtra(key: string, value: unknown): void {
   safe(
     () => {
@@ -175,6 +218,18 @@ export function setExtra(key: string, value: unknown): void {
   );
 }
 
+/** Remove a single extra field by key. */
+export function clearExtra(key: string): void {
+  safe(
+    () => {
+      getClient()?.clearExtra(key);
+    },
+    undefined,
+    'clearExtra',
+  );
+}
+
+/** Attach a named context object, or pass `null` to remove it. */
 export function setContext(key: string, context: Record<string, unknown> | null): void {
   safe(
     () => {
@@ -185,6 +240,21 @@ export function setContext(key: string, context: Record<string, unknown> | null)
   );
 }
 
+/** Remove a named context by key. */
+export function clearContext(key: string): void {
+  safe(
+    () => {
+      getClient()?.clearContext(key);
+    },
+    undefined,
+    'clearContext',
+  );
+}
+
+/**
+ * Flush queued events to the transport.
+ * @returns `true` if the queue was fully drained within the timeout.
+ */
 export async function flush(timeoutMs?: number): Promise<boolean> {
   return safeAsync(
     async () => {
@@ -194,18 +264,20 @@ export async function flush(timeoutMs?: number): Promise<boolean> {
       }
       return client.flush(timeoutMs);
     },
-    true,
+    false,
     'flush',
   );
 }
 
 /**
- * Flush remaining work and tear down the client. Idempotent.
+ * Flush remaining work and tear down the client. Idempotent. Never rejects.
+ * @returns `true` if the final flush completed successfully.
  */
 export async function close(timeoutMs?: number): Promise<boolean> {
   return closeClient(timeoutMs);
 }
 
+/** Most recent event id produced by this process, if any. */
 export function lastEventId(): string | undefined {
   return safe(() => getClient()?.lastEventId(), undefined, 'lastEventId');
 }
@@ -227,7 +299,9 @@ const HealStack = {
   clearTag,
   clearTags,
   setExtra,
+  clearExtra,
   setContext,
+  clearContext,
   flush,
   close,
   lastEventId,

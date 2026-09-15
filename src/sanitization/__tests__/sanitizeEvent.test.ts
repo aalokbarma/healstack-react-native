@@ -279,6 +279,9 @@ describe('sensitive key matching', () => {
     expect(isDeniedKey('set-cookie', deny)).toBe(true);
     expect(isDeniedKey('set_cookie', deny)).toBe(true);
     expect(isDeniedKey('creditCard', deny)).toBe(true);
+    expect(isDeniedKey('x-api-key', deny)).toBe(true);
+    expect(isDeniedKey('X_Api_Key', deny)).toBe(true);
+    expect(isDeniedKey('my_custom_token', deny)).toBe(true);
     expect(isDeniedKey('safeField', deny)).toBe(false);
     expect(normalizeKey('set-cookie')).toBe('setcookie');
   });

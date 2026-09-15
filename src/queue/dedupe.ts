@@ -44,6 +44,11 @@ export class EventDedupe {
     this.entries.clear();
   }
 
+  /** Current fingerprint count (diagnostics / tests). */
+  get size(): number {
+    return this.entries.size;
+  }
+
   private prune(): void {
     const now = Date.now();
     for (const [key, ts] of this.entries) {

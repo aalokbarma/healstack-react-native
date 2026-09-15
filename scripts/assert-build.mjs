@@ -13,8 +13,15 @@ const require = createRequire(import.meta.url);
 const requiredFiles = [
   'lib/commonjs/index.js',
   'lib/module/index.js',
+  'lib/commonjs/async-storage.js',
+  'lib/module/async-storage.js',
   'lib/typescript/commonjs/index.d.ts',
   'lib/typescript/module/index.d.ts',
+  'lib/typescript/commonjs/async-storage.d.ts',
+  'lib/typescript/module/async-storage.d.ts',
+  'lib/module/index.js.map',
+  'README.md',
+  'LICENSE',
 ];
 
 let failed = false;

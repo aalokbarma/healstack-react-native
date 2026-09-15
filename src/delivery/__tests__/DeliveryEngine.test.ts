@@ -182,6 +182,38 @@ describe('DeliveryEngine', () => {
     expect(raw).toContain('offline');
   });
 
+  it('too_large multi-event batch is split and requeued', async () => {
+    const transport = new ScriptedTransport([
+      { status: 'too_large', message: '413' },
+      { status: 'accepted', httpStatus: 202 },
+      { status: 'accepted', httpStatus: 202 },
+    ]);
+    const { queue, delivery } = createHarness({ transport, maxBatchSize: 10 });
+    await queue.enqueue(sampleEvent('a'));
+    await queue.enqueue(sampleEvent('b'));
+
+    // First flush: 413 → split into two singles still queued; continue loop may send them.
+    const ok = await delivery.flush();
+    expect(ok).toBe(true);
+    expect(queue.size).toBe(0);
+    // Initial too_large attempt + two half batches
+    expect(transport.sent.length).toBeGreaterThanOrEqual(3);
+    const deliveredIds = transport.sent
+      .slice(1)
+      .flat()
+      .map((e) => e.event_id);
+    expect(deliveredIds.sort()).toEqual(['a', 'b']);
+  });
+
+  it('too_large single event is dropped', async () => {
+    const transport = new ScriptedTransport([{ status: 'too_large', message: '413' }]);
+    const { queue, delivery } = createHarness({ transport });
+    await queue.enqueue(sampleEvent('huge'));
+    expect(await delivery.flush()).toBe(true);
+    expect(queue.size).toBe(0);
+    expect(transport.sent).toHaveLength(1);
+  });
+
   it('successful retry delivers previously failed events once', async () => {
     const transport = new ScriptedTransport([
       { status: 'network_error', message: 'down' },

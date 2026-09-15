@@ -12,6 +12,9 @@ const PREFIX = '[HealStack]';
 
 const API_KEY_PATTERN = /hs_(live|test)_[A-Za-z0-9_-]+/g;
 
+/** Bearer / basic auth material that may appear in free-text log values. */
+const BEARER_PATTERN = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+
 const SECRET_KEY_PATTERN =
   /(password|passwd|secret|token|api[_-]?key|apikey|authorization|auth|credential|session|cookie|csrf|private[_-]?key|access[_-]?key|refresh[_-]?token|credit[_-]?card|card[_-]?number|cvv|ssn|pin)/i;
 
@@ -51,7 +54,7 @@ function shouldLog(): boolean {
 }
 
 function scrubString(value: string): string {
-  return value.replace(API_KEY_PATTERN, '[redacted]');
+  return value.replace(API_KEY_PATTERN, '[redacted]').replace(BEARER_PATTERN, '$1 [redacted]');
 }
 
 function scrubValue(value: unknown, depth = 0): unknown {

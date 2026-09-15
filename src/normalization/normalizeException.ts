@@ -4,7 +4,7 @@
 
 import type { ExceptionMechanism, ExceptionValue } from '../types/events';
 import { errorMessage, errorName, isError } from '../utils/isError';
-import { normalizeStackTrace } from './normalizeStackTrace';
+import { normalizeStackTrace, MAX_STACK_CHARS } from './normalizeStackTrace';
 
 export function normalizeException(error: unknown, mechanism?: ExceptionMechanism): ExceptionValue {
   const type = normalizeType(error);
@@ -34,34 +34,46 @@ function normalizeType(error: unknown): string {
 }
 
 function normalizeValue(error: unknown): string {
+  let value: string;
   if (typeof error === 'string') {
-    return error.length > 0 ? error : '(empty string)';
-  }
-  if (typeof error === 'object' && error !== null) {
+    value = error.length > 0 ? error : '(empty string)';
+  } else if (typeof error === 'object' && error !== null) {
     const record = error as { message?: unknown };
     if (typeof record.message === 'string') {
-      return record.message.length > 0 ? record.message : '(no message)';
+      value = record.message.length > 0 ? record.message : '(no message)';
+    } else if (!isError(error) && !('message' in record)) {
+      value = '(no message)';
+    } else {
+      const message = errorMessage(error);
+      value = message.length > 0 ? message : '(no message)';
     }
-    if (!isError(error) && !('message' in record)) {
-      return '(no message)';
-    }
+  } else {
+    const message = errorMessage(error);
+    value = message.length > 0 ? message : '(no message)';
   }
-  const message = errorMessage(error);
-  if (message.length > 0) {
-    return message;
+  // Bound hostile exception strings before pipeline size checks.
+  const MAX_VALUE = 8 * 1024;
+  if (value.length > MAX_VALUE) {
+    return `${value.slice(0, MAX_VALUE)}…[truncated]`;
   }
-  return '(no message)';
+  return value;
 }
 
 function extractStack(error: unknown): string | undefined {
+  let stack: string | undefined;
   if (isError(error) && typeof error.stack === 'string' && error.stack.length > 0) {
-    return error.stack;
-  }
-  if (typeof error === 'object' && error !== null) {
+    stack = error.stack;
+  } else if (typeof error === 'object' && error !== null) {
     const record = error as { stack?: unknown };
     if (typeof record.stack === 'string' && record.stack.length > 0) {
-      return record.stack;
+      stack = record.stack;
     }
   }
-  return undefined;
+  if (!stack) {
+    return undefined;
+  }
+  if (stack.length > MAX_STACK_CHARS) {
+    return `${stack.slice(0, MAX_STACK_CHARS)}\n…[truncated]`;
+  }
+  return stack;
 }

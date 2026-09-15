@@ -9,6 +9,7 @@
  */
 
 import { normalizeValue } from '../normalization/normalizeValue';
+import { createSafeObject, isDangerousKey } from '../utils/dangerousKeys';
 import { utf8ByteLength } from '../utils/size';
 
 const MAX_DEPTH = 8;
@@ -93,9 +94,12 @@ function prepareForSerialize(value: unknown, depth: number, seen: WeakSet<object
       return normalized;
     }
 
-    const sorted: Record<string, unknown> = {};
+    const sorted = createSafeObject();
     const keys = Object.keys(normalized as Record<string, unknown>).sort();
     for (const key of keys) {
+      if (isDangerousKey(key)) {
+        continue;
+      }
       const child = (normalized as Record<string, unknown>)[key];
       if (child === undefined) {
         continue;

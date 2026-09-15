@@ -80,10 +80,12 @@ describe('JavaScript exception capture', () => {
 
   it('captures string and unknown object throws', async () => {
     client.captureException('string failure');
+    await settle();
     client.captureException({ message: 'object failure', code: 42 });
     await settle();
     await client.flush();
 
+    expect(transport.allEvents.length).toBeGreaterThanOrEqual(2);
     expect(transport.allEvents[0]?.exception?.value).toBe('string failure');
     expect(transport.allEvents[1]?.exception?.value).toContain('object failure');
   });
@@ -99,13 +101,16 @@ describe('JavaScript exception capture', () => {
     expect(transport.allEvents).toHaveLength(1);
   });
 
-  it('blocks recursive capture while processing pipeline', async () => {
+  it('blocks nested capture from beforeSend without crashing', async () => {
     const localTransport = new MemoryTransport();
     const holder: { client?: HealStackClient } = {};
     const resolved = resolveOptions({
       ...baseOptions,
+      enableDeduplication: false,
       beforeSend: (event: HealStackEvent) => {
-        holder.client?.captureException(new Error('recursive'));
+        // Nested capture from a hook must not recurse or crash.
+        const nestedId = holder.client?.captureException(new Error('nested-from-hook'));
+        expect(nestedId).toBe('');
         return event;
       },
     });
@@ -117,7 +122,44 @@ describe('JavaScript exception capture', () => {
     await settle();
     await holder.client.flush();
     expect(localTransport.allEvents).toHaveLength(1);
+    expect(localTransport.allEvents[0]?.exception?.value).toBe('root');
     await holder.client.close();
+  });
+
+  it('allows concurrent capture while beforeSend is in flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const localTransport = new MemoryTransport();
+    const resolved = resolveOptions({
+      ...baseOptions,
+      enableDeduplication: false,
+      beforeSend: async (event: HealStackEvent) => {
+        await gate;
+        return event;
+      },
+    });
+    if (!resolved) {
+      throw new Error('expected valid options');
+    }
+    const client = new HealStackClient(resolved, { transport: localTransport });
+
+    const firstId = client.captureException(new Error('first'));
+    expect(firstId).not.toBe('');
+
+    // Yield so processEvent reaches awaiting beforeSend with sdkHookDepth released.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const secondId = client.captureMessage('second', 'info');
+    expect(secondId).not.toBe('');
+
+    release();
+    await settle();
+    await client.flush();
+    expect(localTransport.allEvents.length).toBeGreaterThanOrEqual(2);
+    await client.close();
   });
 
   it('installs and restores global error handler', async () => {

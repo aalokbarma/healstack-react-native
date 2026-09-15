@@ -241,13 +241,14 @@ describe('HttpTransport', () => {
     expect(result.message).toBe('network unavailable');
   });
 
-  it('treats malformed JSON success body as malformed', async () => {
+  it('accepts 2xx even when the body is a JSON primitive acknowledgement', async () => {
     const transport = new HttpTransport(options({ maxRetries: 3 }), {
       fetch: async () => mockResponse(200, { body: '42' }),
       sleep: async () => {},
     });
     const result = await transport.send({ events: [sampleEvent()], discardedEvents: 0 });
-    expect(result.status).toBe('malformed');
+    expect(result.status).toBe('accepted');
+    expect(result.httpStatus).toBe(200);
     expect(result.attempts).toBe(1);
   });
 
@@ -317,6 +318,31 @@ describe('HttpTransport', () => {
     );
     await transport.send({ events: [sampleEvent()], discardedEvents: 0 });
     expect(headers?.['X-Custom']).toBe('1');
+    expect(headers?.['X-HealStack-Key']).toBe('hs_test_abcdefgh');
+  });
+
+  it('drops Authorization and Cookie from transportHeaders', async () => {
+    let headers: Record<string, string> | undefined;
+    const transport = new HttpTransport(
+      options({
+        transportHeaders: {
+          Authorization: 'Bearer leaked',
+          Cookie: 'session=1',
+          'X-Ok': 'yes',
+        },
+      }),
+      {
+        fetch: async (_url, init) => {
+          headers = init?.headers;
+          return mockResponse(202);
+        },
+        sleep: async () => {},
+      },
+    );
+    await transport.send({ events: [sampleEvent()], discardedEvents: 0 });
+    expect(headers?.Authorization).toBeUndefined();
+    expect(headers?.Cookie).toBeUndefined();
+    expect(headers?.['X-Ok']).toBe('yes');
     expect(headers?.['X-HealStack-Key']).toBe('hs_test_abcdefgh');
   });
 });

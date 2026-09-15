@@ -30,8 +30,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Example app (scaffolded later; ignore local installs)
+# Example app local installs / native / Expo
 example/node_modules/
+example/.expo/
+example/dist/
 example/ios/Pods/
 example/android/.gradle/
 example/android/app/build/

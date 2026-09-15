@@ -22,7 +22,7 @@ export const HARD_CAPS: HardCaps = {
   maxEventAgeMs: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
 
-/** Soft floors for timings / sizes that must remain useful. */
+/** Soft floors for timings / sizes that must remain useful (`flushInterval` soft-min does not apply when set to `0`). */
 export const SOFT_MINIMUMS: SoftMinimums = {
   flushInterval: 1_000,
   requestTimeout: 1_000,

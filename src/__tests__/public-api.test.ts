@@ -5,6 +5,11 @@ import HealStack, {
   addBreadcrumb,
   captureException,
   captureMessage,
+  clearContext,
+  clearExtra,
+  clearTag,
+  clearTags,
+  clearUser,
   close,
   flush,
   init,
@@ -12,9 +17,6 @@ import HealStack, {
   lastEventId,
   setContext,
   setExtra,
-  clearTag,
-  clearTags,
-  clearUser,
   setTag,
   setTags,
   setUser,
@@ -59,10 +61,53 @@ describe('public API', () => {
     expect(typeof clearTag).toBe('function');
     expect(typeof clearTags).toBe('function');
     expect(typeof setExtra).toBe('function');
+    expect(typeof clearExtra).toBe('function');
     expect(typeof setContext).toBe('function');
+    expect(typeof clearContext).toBe('function');
     expect(typeof flush).toBe('function');
     expect(typeof close).toBe('function');
     expect(typeof lastEventId).toBe('function');
+    expect(typeof HealStack.clearExtra).toBe('function');
+    expect(typeof HealStack.clearContext).toBe('function');
+  });
+
+  it('init returns whether the SDK became active', () => {
+    expect(
+      init({
+        apiKey: 'not-a-valid-key',
+        endpoint: 'https://api.example.com',
+      }),
+    ).toBe(false);
+    expect(isInitialized()).toBe(false);
+
+    expect(
+      init({
+        apiKey: 'hs_test_abcdefgh',
+        endpoint: 'https://api.example.com',
+      }),
+    ).toBe(true);
+    expect(isInitialized()).toBe(true);
+  });
+
+  it('clearExtra and clearContext are safe no-ops before init and work after', async () => {
+    expect(() => clearExtra('debug')).not.toThrow();
+    expect(() => clearContext('cart')).not.toThrow();
+
+    init({
+      apiKey: 'hs_test_abcdefgh',
+      endpoint: 'https://api.example.com',
+      flushInterval: 0,
+      autoCaptureUnhandledErrors: false,
+      autoCaptureUnhandledRejections: false,
+    });
+
+    setExtra('debug', { nested: true });
+    setContext('cart', { items: 2 });
+    expect(() => clearExtra('debug')).not.toThrow();
+    expect(() => clearContext('cart')).not.toThrow();
+
+    const id = captureException(new Error('after-clear'));
+    expect(id).not.toBe('');
   });
 
   it('exposes package identity constants', () => {

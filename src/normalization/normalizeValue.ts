@@ -2,6 +2,8 @@
  * Depth/breadth/cycle-safe value coercion for extras, contexts, and breadcrumbs.
  */
 
+import { createSafeObject, isDangerousKey } from '../utils/dangerousKeys';
+
 const DEFAULT_MAX_DEPTH = 5;
 const DEFAULT_MAX_KEYS = 100;
 const DEFAULT_MAX_STRING = 8 * 1024;
@@ -75,7 +77,7 @@ export function normalizeValue(
       };
     }
 
-    const out: Record<string, unknown> = {};
+    const out = createSafeObject();
     const entries = Object.entries(value as Record<string, unknown>);
     const limit = Math.min(entries.length, maxKeys);
     for (let i = 0; i < limit; i += 1) {
@@ -84,6 +86,9 @@ export function normalizeValue(
         continue;
       }
       const [key, child] = entry;
+      if (isDangerousKey(key)) {
+        continue;
+      }
       try {
         out[key] = normalizeValue(child, options, depth + 1, visited);
       } catch {

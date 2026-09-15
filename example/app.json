@@ -1,0 +1,23 @@
+{
+  "name": "healstack-rn-example",
+  "slug": "healstack-rn-example",
+  "version": "0.1.0",
+  "orientation": "portrait",
+  "userInterfaceStyle": "light",
+  "newArchEnabled": true,
+  "platforms": ["ios", "android"],
+  "ios": {
+    "supportsTablet": true,
+    "bundleIdentifier": "dev.healstack.example"
+  },
+  "android": {
+    "package": "dev.healstack.example"
+  },
+  "extra": {
+    "healstackApiKey": "hs_test_replace_me_XXXXXXXX",
+    "healstackEndpoint": "http://127.0.0.1:8787",
+    "healstackAllowHttp": true,
+    "healstackEnvironment": "development",
+    "healstackRelease": "dev.healstack.example@0.1.0"
+  }
+}

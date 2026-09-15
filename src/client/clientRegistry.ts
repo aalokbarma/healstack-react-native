@@ -5,7 +5,7 @@
 
 import { optionsAreEquivalent, resolveOptions } from '../config/validation';
 import type { HealStackOptions } from '../types/public';
-import { debug, warn } from '../utils/logger';
+import { configureLogger, debug, warn } from '../utils/logger';
 import { safe, safeAsync } from '../utils/safe';
 import { HealStackClient } from './HealStackClient';
 
@@ -25,6 +25,11 @@ export function isClientInitialized(): boolean {
 export function initClient(rawOptions: HealStackOptions): void {
   safe(
     () => {
+      // Enable debug logging before validation so init failures are visible when requested.
+      if (rawOptions && typeof rawOptions === 'object') {
+        configureLogger({ debug: (rawOptions as HealStackOptions).debug === true });
+      }
+
       const resolved = resolveOptions(rawOptions);
       if (!resolved) {
         // Unrecoverable config — leave any existing client alone, do not crash.
@@ -32,7 +37,7 @@ export function initClient(rawOptions: HealStackOptions): void {
       }
 
       if (currentClient && !currentClient.isClosed()) {
-        if (optionsAreEquivalent(currentClient.getOptions(), resolved)) {
+        if (optionsAreEquivalent(currentClient.getResolvedOptions(), resolved)) {
           debug('init() ignored: already initialized with equivalent options');
           return;
         }
@@ -68,7 +73,7 @@ export async function closeClient(timeoutMs?: number): Promise<boolean> {
         }
       }
     },
-    true,
+    false,
     'closeClient',
   );
 }

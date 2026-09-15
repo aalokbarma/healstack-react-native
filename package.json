@@ -28,6 +28,10 @@
   "source": "./src/index.ts",
   "exports": {
     ".": {
+      "react-native": {
+        "types": "./lib/typescript/module/index.d.ts",
+        "default": "./lib/module/index.js"
+      },
       "import": {
         "types": "./lib/typescript/module/index.d.ts",
         "default": "./lib/module/index.js"
@@ -35,9 +39,14 @@
       "require": {
         "types": "./lib/typescript/commonjs/index.d.ts",
         "default": "./lib/commonjs/index.js"
-      }
+      },
+      "default": "./lib/module/index.js"
     },
     "./async-storage": {
+      "react-native": {
+        "types": "./lib/typescript/module/async-storage.d.ts",
+        "default": "./lib/module/async-storage.js"
+      },
       "import": {
         "types": "./lib/typescript/module/async-storage.d.ts",
         "default": "./lib/module/async-storage.js"
@@ -45,16 +54,26 @@
       "require": {
         "types": "./lib/typescript/commonjs/async-storage.d.ts",
         "default": "./lib/commonjs/async-storage.js"
-      }
+      },
+      "default": "./lib/module/async-storage.js"
     },
     "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "async-storage": [
+        "./lib/typescript/commonjs/async-storage.d.ts"
+      ]
+    }
   },
   "files": [
     "lib",
     "src",
+    "docs",
     "!**/__tests__",
     "!**/*.test.ts",
     "!**/*.test.tsx",
+    "!**/*.tsbuildinfo",
     "README.md",
     "LICENSE"
   ],
@@ -80,8 +99,15 @@
     "build": "bob build",
     "validate:deps": "node scripts/assert-zero-deps.mjs",
     "validate:build": "node scripts/assert-build.mjs",
+    "validate:pack": "node scripts/assert-pack.mjs",
     "validate": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage && npm run build && npm run validate:build && npm run validate:deps",
-    "prepare": "node scripts/prepare.mjs"
+    "validate:release": "npm run validate && npm run validate:pack",
+    "example:install": "npm run build && npm install --prefix example",
+    "example:typecheck": "npm run typecheck --prefix example",
+    "example:test": "npm test --prefix example",
+    "example:verify": "npm run verify:package-entry --prefix example",
+    "prepare": "node scripts/prepare.mjs",
+    "prepublishOnly": "node scripts/assert-zero-deps.mjs && node scripts/assert-build.mjs && node scripts/assert-pack.mjs"
   },
   "peerDependencies": {
     "@react-native-async-storage/async-storage": ">=1.17.0",

@@ -1,11 +1,21 @@
 /**
  * Parse JS engine stack strings into StackFrame[].
  * Supports V8 / Hermes / JSC common formats.
+ *
+ * Hostile stacks are truncated before regex matching to bound CPU/memory.
  */
 
 import type { StackFrame } from '../types/events';
 
+/** Absolute cap on raw stack string length before line splitting / regex. */
+export const MAX_STACK_CHARS = 64 * 1024;
+/** Cap each line before regex match (ReDoS / memory guard). */
+export const MAX_STACK_LINE_CHARS = 2 * 1024;
+/** Max frames retained on the wire (oldest-first after reverse). */
+export const MAX_STACK_FRAMES = 100;
+
 // Numbered groups for ES2017 target (no named groups).
+// Patterns are linear; still run only on length-capped lines.
 const V8_FRAME = /^\s*at\s+(?:(.+?)\s+\()?([^:\n]+):(\d+)(?::(\d+))?\)?\s*$/;
 const HERMES_FRAME = /^\s*(?:at\s+)?(.+?)\s+\(([^:]+):(\d+):(\d+)\)\s*$/;
 const GENERIC_FRAME = /^\s*(.+?)@([^:]+):(\d+)(?::(\d+))?\s*$/;
@@ -15,10 +25,20 @@ export function normalizeStackTrace(stack: string | undefined): StackFrame[] {
     return [];
   }
 
-  const frames: StackFrame[] = [];
-  const lines = stack.split('\n');
+  const capped =
+    stack.length > MAX_STACK_CHARS ? `${stack.slice(0, MAX_STACK_CHARS)}\n…[truncated]` : stack;
 
-  for (const line of lines) {
+  const frames: StackFrame[] = [];
+  const lines = capped.split('\n');
+  const maxLines = MAX_STACK_FRAMES * 3; // allow error header noise before frames
+
+  for (let i = 0; i < lines.length && i < maxLines; i += 1) {
+    const rawLine = lines[i];
+    if (rawLine === undefined) {
+      continue;
+    }
+    const line =
+      rawLine.length > MAX_STACK_LINE_CHARS ? rawLine.slice(0, MAX_STACK_LINE_CHARS) : rawLine;
     const trimmed = line.trim();
     if (!trimmed || /^error:/i.test(trimmed) || /^[A-Za-z]*Error:/.test(trimmed)) {
       continue;
@@ -31,8 +51,12 @@ export function normalizeStackTrace(stack: string | undefined): StackFrame[] {
     }
   }
 
-  // Wire format: oldest first
-  return frames.reverse();
+  // Wire format: oldest first. Cap frame count so hostile stacks cannot explode memory.
+  const oldestFirst = frames.reverse();
+  if (oldestFirst.length > MAX_STACK_FRAMES) {
+    return oldestFirst.slice(oldestFirst.length - MAX_STACK_FRAMES);
+  }
+  return oldestFirst;
 }
 
 function matchV8(line: string): StackFrame | undefined {

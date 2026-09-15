@@ -109,8 +109,14 @@ export interface HealStackOptions {
 
   autoCaptureUnhandledErrors?: boolean;
   autoCaptureUnhandledRejections?: boolean;
+  /**
+   * @experimental Not yet wired — reserved for AppState background flush.
+   * Setting this today has no effect. Default true (future behavior).
+   */
   flushOnAppBackground?: boolean;
+  /** Suppress duplicate exceptions within a short window. Default true. */
   enableDeduplication?: boolean;
+  /** Attach a synthetic stacktrace to `captureMessage` events. Default true. */
   attachStacktraceToMessages?: boolean;
 
   /** Max breadcrumbs retained (FIFO). Default 50. */
@@ -127,7 +133,11 @@ export interface HealStackOptions {
   maxQueueBytes?: number;
   /** Max events per batch. Default 20. */
   maxBatchSize?: number;
-  /** Flush interval in milliseconds. Default 5000. */
+  /**
+   * Automatic flush interval in milliseconds. Default 5000.
+   * Pass `0` to disable interval flushing (manual `flush()` / size / fatal still work).
+   * Values `1..999` are raised to 1000.
+   */
   flushInterval?: number;
   /** HTTP request timeout in milliseconds. Default 15000. */
   requestTimeout?: number;
@@ -154,14 +164,22 @@ export interface HealStackOptions {
    * Called after normalization and before default sanitization.
    * Return a modified event, remove fields, or return `null` to discard.
    * Throws / rejections discard the event and never crash the app.
+   * Do not call `captureException` from this hook (nested captures are ignored).
    */
   beforeSend?: (
     event: HealStackEvent,
     hint: CaptureHint,
   ) => HealStackEvent | null | Promise<HealStackEvent | null>;
+  /** Filter or rewrite breadcrumbs before they enter the buffer. */
   beforeBreadcrumb?: (crumb: Breadcrumb, hint?: CaptureHint) => Breadcrumb | null;
+  /** Optional sink for unexpected SDK-internal errors (never used for app crashes). */
   onInternalError?: (error: Error) => void;
 
+  /**
+   * Persistence backend. Default `'auto'` (detect AsyncStorage, else memory).
+   * Prefer `createAsyncStorageAdapter(AsyncStorage)` for explicit wiring.
+   */
   storage?: 'auto' | 'memory' | HealStackStorage;
+  /** Extra HTTP headers merged into ingest requests (cannot override auth headers). */
   transportHeaders?: Record<string, string>;
 }

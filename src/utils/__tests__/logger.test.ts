@@ -53,6 +53,14 @@ describe('logger', () => {
     expect(logged).not.toContain('hs_live_abc123XYZ');
   });
 
+  it('redacts Bearer tokens in free-text log values', () => {
+    configureLogger({ debug: true });
+    warn('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig');
+    const logged = String(warnSpy.mock.calls[0]?.[1]);
+    expect(logged).toContain('Bearer [redacted]');
+    expect(logged).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+  });
+
   it('redacts secret-keyed object fields', () => {
     configureLogger({ debug: true });
     debug({ password: 'hunter2', ok: 'visible' });

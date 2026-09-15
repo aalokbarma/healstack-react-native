@@ -230,8 +230,23 @@ export function resolveOptions(raw: unknown): ResolvedOptions | null {
     const endpointUrl = new URL(endpoint);
     if (endpointUrl.protocol === 'http:' && !allowHttp) {
       warn(
-        'endpoint uses http://; HTTPS is required unless allowHttp: true (local development only)',
+        'init failed: endpoint uses http://; HTTPS is required unless allowHttp: true (local development only)',
       );
+      return null;
+    }
+    if (endpointUrl.protocol === 'http:' && allowHttp) {
+      const host = endpointUrl.hostname.toLowerCase();
+      const loopback =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '[::1]' ||
+        host === '::1' ||
+        host === '10.0.2.2'; // Android emulator → host machine
+      if (!loopback) {
+        warn(
+          'allowHttp: true with a non-loopback host — traffic is plaintext and vulnerable to MITM; use HTTPS in production',
+        );
+      }
     }
   } catch {
     // Already validated by isValidEndpoint.
@@ -324,13 +339,19 @@ export function resolveOptions(raw: unknown): ResolvedOptions | null {
       HARD_CAPS.maxBatchSize,
       'maxBatchSize',
     ),
-    flushInterval: clampNumber(
-      options.flushInterval,
-      defaults.flushInterval,
-      SOFT_MINIMUMS.flushInterval,
-      HARD_CAPS.flushInterval,
-      'flushInterval',
-    ),
+    flushInterval: (() => {
+      // 0 disables the automatic flush timer; any other value uses the soft minimum.
+      if (options.flushInterval === 0) {
+        return 0;
+      }
+      return clampNumber(
+        options.flushInterval,
+        defaults.flushInterval,
+        SOFT_MINIMUMS.flushInterval,
+        HARD_CAPS.flushInterval,
+        'flushInterval',
+      );
+    })(),
     requestTimeout: clampNumber(
       options.requestTimeout,
       defaults.requestTimeout,
@@ -375,10 +396,11 @@ export function resolveOptions(raw: unknown): ResolvedOptions | null {
 
 /**
  * Stable fingerprint for init idempotency.
+ * Does not embed the raw API key (length + non-cryptographic hash only).
  */
 export function optionsFingerprint(options: ResolvedOptions): string {
   return JSON.stringify({
-    apiKey: options.apiKey,
+    apiKey: fingerprintSecret(options.apiKey),
     endpoint: options.endpoint,
     allowHttp: options.allowHttp,
     environment: options.environment,
@@ -407,6 +429,15 @@ export function optionsFingerprint(options: ResolvedOptions): string {
     enableDeduplication: options.enableDeduplication,
     attachStacktraceToMessages: options.attachStacktraceToMessages,
   });
+}
+
+/** Non-cryptographic fingerprint so idempotency checks never retain raw secrets in the string. */
+function fingerprintSecret(value: string): string {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  }
+  return `${value.length}:${hash}`;
 }
 
 export function optionsAreEquivalent(a: ResolvedOptions, b: ResolvedOptions): boolean {

@@ -87,16 +87,34 @@ describe('safe', () => {
     ).resolves.toBe('fallback');
   });
 
-  it('safeAsyncWithTimeout returns fallback when fn throws synchronously', async () => {
-    await expect(
-      safeAsyncWithTimeout(
-        () => {
-          throw new Error('sync throw');
-        },
-        'fallback',
-        'sync-tag',
-        1000,
-      ),
-    ).resolves.toBe('fallback');
+  it('safeAsyncWithTimeout does not leave unhandled rejections after timeout', async () => {
+    jest.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+
+    let rejectWork!: (error: Error) => void;
+    const promise = safeAsyncWithTimeout(
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectWork = reject;
+        }),
+      'timed-out',
+      'late-reject',
+      50,
+    );
+
+    await jest.advanceTimersByTimeAsync(50);
+    await expect(promise).resolves.toBe('timed-out');
+
+    rejectWork(new Error('late boom'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(unhandled).toHaveLength(0);
+
+    process.off('unhandledRejection', onUnhandled);
+    jest.useRealTimers();
   });
 });

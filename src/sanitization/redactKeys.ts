@@ -30,6 +30,8 @@ export const DEFAULT_SENSITIVE_KEYS = [
   // Additional common secrets
   'api_key',
   'apikey',
+  'x-api-key',
+  'x_api_key',
   'auth',
   'credential',
   'session',
@@ -38,6 +40,16 @@ export const DEFAULT_SENSITIVE_KEYS = [
   'access_key',
   'ssn',
   'pin',
+] as const;
+
+/** Normalized suffixes treated as sensitive even when prefixed (e.g. `xapikey`, `mytoken`). */
+const SENSITIVE_SUFFIXES = [
+  'apikey',
+  'token',
+  'secret',
+  'password',
+  'passwd',
+  'credential',
 ] as const;
 
 export function normalizeKey(key: string): string {
@@ -58,5 +70,14 @@ export function buildDenySet(extraFields: string[] = []): Set<string> {
 }
 
 export function isDeniedKey(key: string, deny: Set<string>): boolean {
-  return deny.has(normalizeKey(key));
+  const normalized = normalizeKey(key);
+  if (deny.has(normalized)) {
+    return true;
+  }
+  for (const suffix of SENSITIVE_SUFFIXES) {
+    if (normalized === suffix || normalized.endsWith(suffix)) {
+      return true;
+    }
+  }
+  return false;
 }

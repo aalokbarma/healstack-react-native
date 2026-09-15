@@ -24,6 +24,7 @@ import { applyBeforeSend } from '../sanitization/beforeSend';
 import { resolveStorage, type Storage } from '../storage';
 import { HttpTransport } from '../transport/HttpTransport';
 import type { Transport } from '../transport/Transport';
+import type { HealStackEvent } from '../types/events';
 import type {
   BreadcrumbInput,
   CaptureHint,
@@ -55,10 +56,14 @@ export interface HealStackClientDeps {
 
 export class HealStackClient {
   private closed = false;
+  private shuttingDown = false;
   private closeInFlight: Promise<boolean> | undefined;
-  private processing = false;
+  private readonly pendingProcesses = new Set<Promise<void>>();
+  private readonly maxPendingProcesses: number;
   private captureDepth = 0;
   private inAutoCapture = false;
+  /** >0 while inside beforeSend / similar hooks — blocks nested capture only. */
+  private sdkHookDepth = 0;
   private lastEventIdValue: string | undefined;
   private transportDisabled = false;
 
@@ -73,7 +78,11 @@ export class HealStackClient {
     private readonly options: ResolvedOptions,
     deps: HealStackClientDeps = {},
   ) {
-    this.scope = new Scope(options.maxBreadcrumbs, options.maxTags);
+    this.scope = new Scope(options.maxBreadcrumbs, options.maxTags, {
+      maxExtraKeys: METADATA_DEFAULTS.maxExtraKeys,
+      maxContextKeys: METADATA_DEFAULTS.maxContextKeys,
+    });
+    this.maxPendingProcesses = Math.max(1, Math.min(options.maxQueueSize, 100));
     const storage = deps.storage ?? resolveStorage(options.storage);
     this.queue =
       deps.queue ??
@@ -129,8 +138,23 @@ export class HealStackClient {
     });
   }
 
-  getOptions(): ResolvedOptions {
+  /**
+   * Internal resolved options including the API key.
+   * Used for init idempotency — not part of the public package API.
+   */
+  getResolvedOptions(): ResolvedOptions {
     return this.options;
+  }
+
+  /**
+   * Diagnostic options snapshot with the API key redacted.
+   * Prefer this over logging raw configuration.
+   */
+  getOptions(): ResolvedOptions {
+    return {
+      ...this.options,
+      apiKey: '[redacted]',
+    };
   }
 
   /** Exposed for tests — do not use from application code. */
@@ -154,7 +178,7 @@ export class HealStackClient {
   }
 
   isEnabled(): boolean {
-    return !this.closed && this.options.enabled && !this.transportDisabled;
+    return !this.closed && !this.shuttingDown && this.options.enabled && !this.transportDisabled;
   }
 
   isClosed(): boolean {
@@ -231,11 +255,25 @@ export class HealStackClient {
     safeRun(() => this.scope.setExtra(key, value), 'setExtra');
   }
 
+  clearExtra(key: string): void {
+    if (!this.isEnabled()) {
+      return;
+    }
+    safeRun(() => this.scope.clearExtra(key), 'clearExtra');
+  }
+
   setContext(key: string, context: Record<string, unknown> | null): void {
     if (!this.isEnabled()) {
       return;
     }
     safeRun(() => this.scope.setContext(key, context), 'setContext');
+  }
+
+  clearContext(key: string): void {
+    if (!this.isEnabled()) {
+      return;
+    }
+    safeRun(() => this.scope.clearContext(key), 'clearContext');
   }
 
   addBreadcrumb(input: BreadcrumbInput): void {
@@ -305,7 +343,7 @@ export class HealStackClient {
           }
         }
 
-        this.scheduleProcess({
+        const scheduled = this.scheduleProcess({
           type: 'message',
           level: hint?.level ?? level,
           message,
@@ -314,6 +352,9 @@ export class HealStackClient {
           ...(exception !== undefined ? { exception } : {}),
           ...(hint !== undefined ? { hint } : {}),
         });
+        if (!scheduled) {
+          return '';
+        }
 
         return eventId;
       },
@@ -329,12 +370,17 @@ export class HealStackClient {
   async flush(timeoutMs = 5_000): Promise<boolean> {
     return safeAsync(
       async () => {
+        if (this.closed && this.queue.isEmpty() && this.pendingProcesses.size === 0) {
+          return true;
+        }
+        // Let already-scheduled captures finish enqueueing before draining.
+        await this.awaitPendingProcesses(timeoutMs);
         if (this.closed && this.queue.isEmpty()) {
           return true;
         }
         return this.delivery.flush(timeoutMs);
       },
-      true,
+      false,
       'flush',
     );
   }
@@ -366,23 +412,29 @@ export class HealStackClient {
   }
 
   private async runClose(timeoutMs: number): Promise<boolean> {
-    // Become inactive immediately so captures / interval work stop accepting new work.
-    this.closed = true;
+    // Stop accepting new captures immediately, but allow in-flight pipeline
+    // work to finish enqueueing before we mark closed and flush.
+    this.shuttingDown = true;
 
     let flushed = true;
     try {
       // 1. Remove global handlers first (stop new auto-captures).
       safeRun(() => this.autoCapture.uninstall(), 'close.uninstallHandlers');
-      // 2. Stop scheduled flushing, then flush pending events where safely possible.
+      // 2. Drain already-scheduled processEvent work.
+      await this.awaitPendingProcesses(timeoutMs);
+      // 3. Now inactive for pipeline; stop scheduler and flush the queue.
+      this.closed = true;
       flushed = await safeAsync(
         () => this.delivery.shutdown(timeoutMs),
         false,
         'close.deliveryShutdown',
       );
-      // 3. Release queue / storage resources.
+      // 4. Release queue / storage resources.
       await safeAsync(() => this.queue.close(), undefined, 'close.queue');
     } finally {
-      // 4. Idempotent final teardown — must run even if flush/queue threw.
+      this.closed = true;
+      this.shuttingDown = true;
+      // 5. Idempotent final teardown — must run even if flush/queue threw.
       safeRun(() => this.delivery.stop(), 'close.deliveryStop');
       safeRun(() => this.autoCapture.uninstall(), 'close.uninstallHandlersFinal');
       safeRun(() => this.dedupe.clear(), 'close.dedupe');
@@ -392,6 +444,32 @@ export class HealStackClient {
       debug('client closed');
     }
     return flushed;
+  }
+
+  private async awaitPendingProcesses(timeoutMs: number): Promise<void> {
+    if (this.pendingProcesses.size === 0) {
+      return;
+    }
+    const pending = Array.from(this.pendingProcesses);
+    await safeAsync(
+      async () => {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.max(0, timeoutMs));
+          void Promise.all(pending).then(
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+          );
+        });
+      },
+      undefined,
+      'awaitPendingProcesses',
+    );
   }
 
   private getBreadcrumbPrepareOptions() {
@@ -416,13 +494,21 @@ export class HealStackClient {
   }
 
   private canCapture(): boolean {
-    return this.isEnabled() && !this.processing && !this.inAutoCapture && this.captureDepth === 0;
+    // Recursion / hook re-entry guards only — concurrent captures are allowed.
+    return (
+      this.isEnabled() && !this.inAutoCapture && this.captureDepth === 0 && this.sdkHookDepth === 0
+    );
   }
 
   private installAutoCapture(): void {
     this.autoCapture.install(this.options, (error, source, opts) => {
       safeRun(() => {
-        if (!this.isEnabled() || this.inAutoCapture || this.captureDepth > 0 || this.processing) {
+        if (
+          !this.isEnabled() ||
+          this.inAutoCapture ||
+          this.captureDepth > 0 ||
+          this.sdkHookDepth > 0
+        ) {
           return;
         }
         this.inAutoCapture = true;
@@ -458,7 +544,7 @@ export class HealStackClient {
 
     this.captureDepth += 1;
     try {
-      this.scheduleProcess({
+      const scheduled = this.scheduleProcess({
         type: 'exception',
         level,
         exception,
@@ -466,6 +552,9 @@ export class HealStackClient {
         eventId,
         hint,
       });
+      if (!scheduled) {
+        return '';
+      }
     } finally {
       this.captureDepth -= 1;
     }
@@ -481,12 +570,31 @@ export class HealStackClient {
     hint?: CaptureHint;
     scope: ReturnType<Scope['snapshot']>;
     eventId: string;
-  }): void {
-    void Promise.resolve().then(() => {
-      safeRun(() => {
-        void this.processEvent(input);
-      }, 'scheduleProcess');
-    });
+  }): boolean {
+    if (this.pendingProcesses.size >= this.maxPendingProcesses) {
+      debug('capture dropped: pending process backlog full', {
+        pending: this.pendingProcesses.size,
+        max: this.maxPendingProcesses,
+      });
+      return false;
+    }
+    const task = (async () => {
+      try {
+        await this.processEvent(input);
+      } catch (error) {
+        handleInternalError(error, 'scheduleProcess');
+      }
+    })();
+    this.pendingProcesses.add(task);
+    void task.then(
+      () => {
+        this.pendingProcesses.delete(task);
+      },
+      () => {
+        this.pendingProcesses.delete(task);
+      },
+    );
+    return true;
   }
 
   private async processEvent(input: {
@@ -498,11 +606,11 @@ export class HealStackClient {
     scope: ReturnType<Scope['snapshot']>;
     eventId: string;
   }): Promise<void> {
+    // Allow completion while shuttingDown so close() can drain already-scheduled work.
     if (this.closed || !this.options.enabled) {
       return;
     }
 
-    this.processing = true;
     try {
       if (this.options.sampleRate < 1 && Math.random() > this.options.sampleRate) {
         debug('event dropped by sampleRate');
@@ -530,10 +638,25 @@ export class HealStackClient {
 
       let event = normalized;
 
-      // Optional beforeSend (between validate and sanitize)
+      // Optional beforeSend (between validate and sanitize).
+      // Raise sdkHookDepth only for the *synchronous* hook body so nested
+      // captureException/Message from beforeSend is blocked, while concurrent
+      // app captures can proceed while an async beforeSend Promise is in flight.
+      const userHook = this.options.beforeSend;
+      const hookWithReentryGuard = userHook
+        ? (hookEvent: HealStackEvent, hookHint: CaptureHint) => {
+            this.sdkHookDepth += 1;
+            try {
+              return userHook(hookEvent, hookHint);
+            } finally {
+              this.sdkHookDepth -= 1;
+            }
+          }
+        : undefined;
+
       const beforeSendResult = await applyBeforeSend(
         event,
-        this.options.beforeSend,
+        hookWithReentryGuard,
         input.hint ?? { originalException: undefined },
       );
       if (beforeSendResult.action === 'discard') {
@@ -556,6 +679,12 @@ export class HealStackClient {
         return;
       }
 
+      // If close finished and marked closed while we were in beforeSend, do not enqueue.
+      if (this.closed) {
+        debug('event dropped: client closed before enqueue');
+        return;
+      }
+
       await this.queue.enqueue(finalized.event);
 
       if (
@@ -565,8 +694,6 @@ export class HealStackClient {
       }
     } catch (error) {
       handleInternalError(error, 'processEvent');
-    } finally {
-      this.processing = false;
     }
   }
 }

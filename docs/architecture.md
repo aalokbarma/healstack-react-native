@@ -1,8 +1,28 @@
 # @healstack/react-native — Architecture
 
-Status: **Proposal / awaiting approval**
-Version: 0.1 (pre-implementation)
-Scope: React Native client SDK only. No backend, dashboard, AI agents, code-fix engine, or infrastructure.
+**Status: implemented reference (v0.1.0)**  
+This document describes the shipped SDK. If a detail conflicts with `README.md`,
+`docs/performance.md`, `docs/reliability-review.md`, `docs/security.md`, or
+`docs/public-api-review.md`, prefer those specialized docs and the source under `src/`.
+
+**Non-goals remain:** native crash capture, source-map upload CLI, tracing, auto network/navigation instrumentation (see §1).
+
+---
+
+## Delivery behavior (authoritative for v0.1)
+
+| Condition | Behavior |
+| --- | --- |
+| HTTP 2xx | Persist queue (remove drained batch from disk) |
+| HTTP 401/403 | Disable transport; drained batch not requeued; `flush` stops |
+| HTTP 413 / too_large | If batch size &gt; 1 → **split in half and requeue**; if size 1 → drop |
+| malformed | Drop batch |
+| network / 5xx / timeout / 429 | Requeue batch; stop current flush (retry on next interval / flush). `Retry-After` applies **within** the current `HttpTransport.send` attempt loop only — there is no global send pause across flushes |
+| Per-send retries | Up to `maxRetries` after the first attempt (transient only). Exhaustion does **not** permanently drop — events are requeued for a later flush until age/size eviction |
+
+Auto-flush uses a single self-rescheduling timer (not stacked intervals). Concurrent `flush()` calls share one in-flight drain.
+
+> **Note:** Sections below retain useful design rationale but may still mention files or behaviors that were redesigned (e.g. a global `isProcessing` mutex was removed in favor of concurrent captures + hook-depth guards; there is no `RateLimiter.ts` module — backoff lives in `HttpTransport` / `backoff.ts`). Treat the table above as the delivery contract.
 
 ---
 
@@ -182,8 +202,13 @@ healstack-sdk/
 
   docs/
     architecture.md
+    public-api-review.md          # supported surface, internal vs experimental
+    npm-release.md                # pack/publish checklist (no auto-publish)
+    security.md                   # security audit, guarantees, residual risks
+    performance.md                # costs, trade-offs, production defaults
+    reliability-review.md         # hostile failure scenarios + fixes
     wire-protocol.md              # the contract the backend must implement
-  example/                        # bare RN CLI app for manual verification
+  example/                        # Expo RN app consuming the package entry
   README.md
 ```
 
@@ -288,7 +313,7 @@ interface HealStackOptions {
   maxEventBytes?: number;         // default 200 KiB
   maxBatchEvents?: number;        // default 20
   maxEventAgeMs?: number;         // default 24h
-  flushIntervalMs?: number;       // default 5000, min 1000
+  flushIntervalMs?: number;       // default 5000; 0 disables; else soft-min 1000
   requestTimeoutMs?: number;      // default 15000
   maxRetries?: number;            // default 5
 

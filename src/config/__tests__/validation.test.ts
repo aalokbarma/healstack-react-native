@@ -5,6 +5,7 @@ import {
   isValidApiKey,
   isValidEndpoint,
   isValidEnvironment,
+  optionsFingerprint,
   resolveOptions,
 } from '../index';
 import { configureLogger, resetLogger } from '../../utils/logger';
@@ -175,6 +176,14 @@ describe('config validation', () => {
       expect(resolved?.flushInterval).toBe(SOFT_MINIMUMS.flushInterval);
     });
 
+    it('allows flushInterval of 0 to disable automatic flushing', () => {
+      const resolved = resolveOptions({
+        ...valid,
+        flushInterval: 0,
+      });
+      expect(resolved?.flushInterval).toBe(0);
+    });
+
     it('allows maxRetries of 0', () => {
       const resolved = resolveOptions({ ...valid, maxRetries: 0 });
       expect(resolved?.maxRetries).toBe(0);
@@ -188,6 +197,27 @@ describe('config validation', () => {
       });
       expect(resolved?.allowHttp).toBe(true);
       expect(resolved?.endpoint).toBe('http://localhost:8787');
+    });
+
+    it('rejects http endpoints when allowHttp is false', () => {
+      expect(
+        resolveOptions({
+          ...valid,
+          endpoint: 'http://localhost:8787',
+          allowHttp: false,
+        }),
+      ).toBeNull();
+    });
+
+    it('does not embed the raw apiKey in optionsFingerprint', () => {
+      const resolved = resolveOptions(valid);
+      expect(resolved).not.toBeNull();
+      if (!resolved) {
+        return;
+      }
+      const fp = optionsFingerprint(resolved);
+      expect(fp).not.toContain(valid.apiKey);
+      expect(fp).toContain('"apiKey":');
     });
 
     it('strips trailing slashes from endpoint', () => {

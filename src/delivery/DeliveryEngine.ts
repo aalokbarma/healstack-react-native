@@ -216,7 +216,7 @@ export class DeliveryEngine {
       const discarded = this.queue.takeDiscardedCount();
       const result = await this.sendBatch(batch, discarded, deadline);
 
-      const outcome = await this.applyResult(batch, result);
+      const outcome = await this.applyResult(batch, result, deadline);
       if (outcome === 'stop_failure') {
         return false;
       }
@@ -253,6 +253,7 @@ export class DeliveryEngine {
   private async applyResult(
     batch: HealStackEvent[],
     result: TransportResult,
+    deadline: number,
   ): Promise<'continue' | 'stop_failure'> {
     if (result.status === 'accepted') {
       // Durable removal only after successful transmission.
@@ -268,8 +269,37 @@ export class DeliveryEngine {
       return 'stop_failure';
     }
 
-    if (result.status === 'malformed' || result.status === 'too_large') {
-      debug(`delivery: dropping batch after ${result.status}`);
+    if (result.status === 'malformed') {
+      debug('delivery: dropping batch after malformed');
+      await this.queue.persistNow();
+      return 'continue';
+    }
+
+    if (result.status === 'too_large') {
+      if (batch.length > 1) {
+        const mid = Math.ceil(batch.length / 2);
+        const left = batch.slice(0, mid);
+        const right = batch.slice(mid);
+        debug('delivery: splitting too_large batch', {
+          size: batch.length,
+          left: left.length,
+          right: right.length,
+        });
+        // Process halves immediately so they are not re-batched at the original size.
+        const leftResult = await this.sendBatch(left, 0, deadline);
+        const leftOutcome = await this.applyResult(left, leftResult, deadline);
+        if (leftOutcome === 'stop_failure') {
+          // Requeue the untouched right half before stopping.
+          for (const event of right) {
+            await this.queue.enqueue(event);
+          }
+          await this.queue.persistNow();
+          return 'stop_failure';
+        }
+        const rightResult = await this.sendBatch(right, 0, deadline);
+        return this.applyResult(right, rightResult, deadline);
+      }
+      debug('delivery: dropping single too_large event');
       await this.queue.persistNow();
       return 'continue';
     }
