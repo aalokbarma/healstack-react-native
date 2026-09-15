@@ -5,25 +5,31 @@
  * Never throws into application code.
  */
 
+import { BREADCRUMB_DEFAULTS, finalizeBreadcrumb, prepareBreadcrumb } from '../breadcrumbs';
+import { prepareExceptionCapture, prepareUnhandledExceptionCapture } from '../capture/exception';
+import { METADATA_DEFAULTS } from '../metadata/constants';
+import { prepareTag } from '../metadata/prepareTag';
+import { prepareUserContext } from '../metadata/prepareUserContext';
+import { AutoCaptureManager } from '../capture/globalHandlersManager';
 import type { ResolvedOptions } from '../config/types';
 import { Scope } from '../context/Scope';
-import { normalizeEvent } from '../normalization/normalizeEvent';
-import { normalizeException } from '../normalization/normalizeException';
+import { DeliveryEngine } from '../delivery/DeliveryEngine';
+import { shouldFlushAfterEnqueue } from '../delivery/Batcher';
 import { normalizeStackTrace } from '../normalization/normalizeStackTrace';
-import { EventQueue } from '../queue/EventQueue';
-import { sanitizeEvent } from '../sanitization/sanitizeEvent';
+import { finalizeEvent, normalizeAndValidate } from '../pipeline';
+import { EventDedupe, fingerprintException } from '../queue/dedupe';
+import { PersistedEventQueue } from '../queue/PersistedEventQueue';
+import { applyBeforeSend } from '../sanitization/beforeSend';
+import { resolveStorage, type Storage } from '../storage';
 import { HttpTransport } from '../transport/HttpTransport';
 import type { Transport } from '../transport/Transport';
-import type { ExceptionMechanism } from '../types/events';
 import type {
-  Breadcrumb,
   BreadcrumbInput,
   CaptureHint,
   SeverityLevel,
   TagValue,
   UserContext,
 } from '../types/public';
-import { jsonByteLength } from '../utils/size';
 import {
   configureLogger,
   debug,
@@ -31,35 +37,78 @@ import {
   resetLogger,
   setInternalErrorHandler,
 } from '../utils/logger';
-import { safe, safeAsync, safeAsyncWithTimeout, safeRun } from '../utils/safe';
-import { nowIso } from '../utils/time';
+import { safe, safeAsync, safeRun } from '../utils/safe';
 import { uuidv4 } from '../utils/uuid';
 
 export interface HealStackClientDeps {
   transport?: Transport;
+  autoCapture?: AutoCaptureManager;
+  dedupe?: EventDedupe;
+  /** Override storage (tests). */
+  storage?: Storage;
+  /** Override queue (tests). */
+  queue?: PersistedEventQueue;
+  /** Override delivery engine (tests). */
+  delivery?: DeliveryEngine;
 }
 
 export class HealStackClient {
   private closed = false;
   private processing = false;
+  private captureDepth = 0;
+  private inAutoCapture = false;
   private lastEventIdValue: string | undefined;
-  private flushInFlight: Promise<boolean> | undefined;
   private transportDisabled = false;
 
   private readonly scope: Scope;
-  private readonly queue: EventQueue;
+  private readonly queue: PersistedEventQueue;
   private readonly transport: Transport;
+  private readonly delivery: DeliveryEngine;
+  private readonly autoCapture: AutoCaptureManager;
+  private readonly dedupe: EventDedupe;
 
   constructor(
     private readonly options: ResolvedOptions,
     deps: HealStackClientDeps = {},
   ) {
-    this.scope = new Scope(options.maxBreadcrumbs);
-    this.queue = new EventQueue(options.maxQueueSize, options.maxQueueBytes);
+    this.scope = new Scope(options.maxBreadcrumbs, options.maxTags);
+    const storage = deps.storage ?? resolveStorage(options.storage);
+    this.queue =
+      deps.queue ??
+      new PersistedEventQueue({
+        storage,
+        maxEvents: options.maxQueueSize,
+        maxBytes: options.maxQueueBytes,
+        maxEventAgeMs: options.maxEventAgeMs,
+      });
     this.transport = deps.transport ?? new HttpTransport(options);
+    this.delivery =
+      deps.delivery ??
+      new DeliveryEngine({
+        queue: this.queue,
+        transport: this.transport,
+        maxBatchSize: options.maxBatchSize,
+        flushIntervalMs: options.flushInterval,
+        onUnauthorized: () => {
+          this.transportDisabled = true;
+        },
+        isTransportDisabled: () => this.transportDisabled,
+      });
+    this.autoCapture = deps.autoCapture ?? new AutoCaptureManager();
+    this.dedupe =
+      deps.dedupe ??
+      new EventDedupe({
+        windowMs: 5_000,
+        maxEntries: 50,
+      });
 
     configureLogger({ debug: options.debug });
     setInternalErrorHandler(options.onInternalError);
+
+    if (options.enabled) {
+      this.installAutoCapture();
+      this.delivery.start();
+    }
 
     debug('client initialized', {
       environment: options.environment,
@@ -70,6 +119,8 @@ export class HealStackClient {
       flushInterval: options.flushInterval,
       maxBatchSize: options.maxBatchSize,
       maxRetries: options.maxRetries,
+      autoCaptureErrors: options.autoCaptureUnhandledErrors,
+      autoCaptureRejections: options.autoCaptureUnhandledRejections,
     });
   }
 
@@ -85,6 +136,16 @@ export class HealStackClient {
   /** Exposed for tests. */
   getTransport(): Transport {
     return this.transport;
+  }
+
+  /** Exposed for tests. */
+  getDeliveryEngine(): DeliveryEngine {
+    return this.delivery;
+  }
+
+  /** Exposed for tests. */
+  getAutoCaptureManager(): AutoCaptureManager {
+    return this.autoCapture;
   }
 
   isEnabled(): boolean {
@@ -103,21 +164,59 @@ export class HealStackClient {
     if (!this.isEnabled()) {
       return;
     }
-    safeRun(() => this.scope.setUser(user), 'setUser');
+    safeRun(() => {
+      if (user === null) {
+        this.scope.clearUser();
+        return;
+      }
+      const prepared = prepareUserContext(user, this.getMetadataPrepareOptions());
+      this.scope.setUser(prepared);
+    }, 'setUser');
+  }
+
+  clearUser(): void {
+    this.setUser(null);
   }
 
   setTag(key: string, value: TagValue): void {
     if (!this.isEnabled()) {
       return;
     }
-    safeRun(() => this.scope.setTag(key, value), 'setTag');
+    safeRun(() => {
+      const prepared = prepareTag(key, value, this.getMetadataPrepareOptions());
+      if (!prepared) {
+        return;
+      }
+      this.scope.setTag(prepared.key, prepared.value);
+    }, 'setTag');
   }
 
   setTags(tags: Record<string, TagValue>): void {
     if (!this.isEnabled()) {
       return;
     }
-    safeRun(() => this.scope.setTags(tags), 'setTags');
+    safeRun(() => {
+      for (const [key, value] of Object.entries(tags)) {
+        const prepared = prepareTag(key, value, this.getMetadataPrepareOptions());
+        if (prepared) {
+          this.scope.setTag(prepared.key, prepared.value);
+        }
+      }
+    }, 'setTags');
+  }
+
+  clearTag(key: string): void {
+    if (!this.isEnabled()) {
+      return;
+    }
+    safeRun(() => this.scope.clearTag(key), 'clearTag');
+  }
+
+  clearTags(): void {
+    if (!this.isEnabled()) {
+      return;
+    }
+    safeRun(() => this.scope.clearTags(), 'clearTags');
   }
 
   setExtra(key: string, value: unknown): void {
@@ -139,7 +238,8 @@ export class HealStackClient {
       return;
     }
     safeRun(() => {
-      let crumb = prepareBreadcrumb(input);
+      const prepareOptions = this.getBreadcrumbPrepareOptions();
+      let crumb = prepareBreadcrumb(input, prepareOptions);
       const hook = this.options.beforeBreadcrumb;
       if (hook) {
         const result = hook(crumb);
@@ -147,7 +247,7 @@ export class HealStackClient {
           return;
         }
         if (result && typeof result === 'object') {
-          crumb = result;
+          crumb = finalizeBreadcrumb(result, prepareOptions);
         }
       }
       this.scope.addPreparedBreadcrumb(crumb);
@@ -160,33 +260,11 @@ export class HealStackClient {
   captureException(error: unknown, hint?: CaptureHint): string {
     return safe(
       () => {
-        if (!this.isEnabled() || this.processing) {
+        if (!this.canCapture()) {
           return '';
         }
-        const eventId = hint?.event_id ?? uuidv4();
-        this.lastEventIdValue = eventId;
-
-        const mechanism: ExceptionMechanism = {
-          type: hint?.mechanism?.type ?? 'generic',
-          handled: hint?.mechanism?.handled ?? true,
-        };
-        if (hint?.mechanism?.data) {
-          mechanism.data = hint.mechanism.data;
-        }
-
-        const exception = normalizeException(error, mechanism);
-        const scope = this.scope.snapshot();
-
-        this.scheduleProcess({
-          type: 'exception',
-          level: hint?.level ?? 'error',
-          exception,
-          scope,
-          eventId,
-          ...(hint !== undefined ? { hint } : {}),
-        });
-
-        return eventId;
+        const prepared = prepareExceptionCapture(error, hint);
+        return this.enqueueExceptionCapture(prepared.exception, prepared.level, prepared.hint);
       },
       '',
       'captureException',
@@ -199,14 +277,15 @@ export class HealStackClient {
   captureMessage(message: string, level: SeverityLevel = 'info', hint?: CaptureHint): string {
     return safe(
       () => {
-        if (!this.isEnabled() || this.processing) {
+        if (!this.canCapture()) {
           return '';
         }
         const eventId = hint?.event_id ?? uuidv4();
         this.lastEventIdValue = eventId;
 
         const scope = this.scope.snapshot();
-        let exception = undefined as ReturnType<typeof normalizeException> | undefined;
+        let exception = undefined as
+          ReturnType<typeof prepareExceptionCapture>['exception'] | undefined;
 
         if (this.options.attachStacktraceToMessages) {
           const synthetic = hint?.syntheticException ?? new Error(message);
@@ -239,8 +318,8 @@ export class HealStackClient {
   }
 
   /**
-   * Drain the queue through transport. Concurrent calls share one in-flight flush.
-   * Never rejects.
+   * Drain the queue through the delivery engine.
+   * Concurrent calls share one in-flight flush. Never rejects.
    */
   async flush(timeoutMs = 5_000): Promise<boolean> {
     return safeAsync(
@@ -248,22 +327,7 @@ export class HealStackClient {
         if (this.closed && this.queue.isEmpty()) {
           return true;
         }
-        if (this.flushInFlight) {
-          return this.flushInFlight;
-        }
-
-        const pending = this.runFlush(timeoutMs).then(
-          (ok) => {
-            this.flushInFlight = undefined;
-            return ok;
-          },
-          () => {
-            this.flushInFlight = undefined;
-            return false;
-          },
-        );
-        this.flushInFlight = pending;
-        return pending;
+        return this.delivery.flush(timeoutMs);
       },
       true,
       'flush',
@@ -279,8 +343,11 @@ export class HealStackClient {
         if (this.closed) {
           return true;
         }
-        const flushed = await this.flush(timeoutMs);
+        this.autoCapture.uninstall();
+        const flushed = await this.delivery.shutdown(timeoutMs);
+        await this.queue.close();
         this.closed = true;
+        this.dedupe.clear();
         safeRun(() => this.scope.clear(), 'close.clearScope');
         debug('client closed');
         setInternalErrorHandler(undefined);
@@ -292,16 +359,94 @@ export class HealStackClient {
     );
   }
 
+  private getBreadcrumbPrepareOptions() {
+    return {
+      maxMessageSize: this.options.maxBreadcrumbMessageSize,
+      scrubFields: this.options.scrubFields,
+      maxDataDepth: BREADCRUMB_DEFAULTS.maxDataDepth,
+      maxDataKeys: BREADCRUMB_DEFAULTS.maxDataKeys,
+      maxDataStringLength: BREADCRUMB_DEFAULTS.maxDataStringLength,
+    };
+  }
+
+  private getMetadataPrepareOptions() {
+    return {
+      scrubFields: this.options.scrubFields,
+      maxUserIdLength: METADATA_DEFAULTS.maxUserIdLength,
+      maxUserFieldLength: METADATA_DEFAULTS.maxUserFieldLength,
+      maxUserExtraKeys: METADATA_DEFAULTS.maxUserExtraKeys,
+      maxTagKeyLength: METADATA_DEFAULTS.maxTagKeyLength,
+      maxTagValueLength: METADATA_DEFAULTS.maxTagValueLength,
+    };
+  }
+
+  private canCapture(): boolean {
+    return this.isEnabled() && !this.processing && !this.inAutoCapture && this.captureDepth === 0;
+  }
+
+  private installAutoCapture(): void {
+    this.autoCapture.install(this.options, (error, source, opts) => {
+      safeRun(() => {
+        if (!this.isEnabled() || this.inAutoCapture || this.captureDepth > 0 || this.processing) {
+          return;
+        }
+        this.inAutoCapture = true;
+        try {
+          const prepared = prepareUnhandledExceptionCapture(error, {
+            source,
+            ...(opts?.isFatal !== undefined ? { isFatal: opts.isFatal } : {}),
+          });
+          this.enqueueExceptionCapture(prepared.exception, prepared.level, prepared.hint);
+        } finally {
+          this.inAutoCapture = false;
+        }
+      }, 'autoCapture');
+    });
+  }
+
+  private enqueueExceptionCapture(
+    exception: ReturnType<typeof prepareExceptionCapture>['exception'],
+    level: SeverityLevel,
+    hint: CaptureHint,
+  ): string {
+    if (this.options.enableDeduplication) {
+      const fp = fingerprintException(exception);
+      if (this.dedupe.shouldSuppress(fp)) {
+        debug('duplicate exception suppressed');
+        return '';
+      }
+    }
+
+    const eventId = hint.event_id ?? uuidv4();
+    this.lastEventIdValue = eventId;
+    const scope = this.scope.snapshot();
+
+    this.captureDepth += 1;
+    try {
+      this.scheduleProcess({
+        type: 'exception',
+        level,
+        exception,
+        scope,
+        eventId,
+        hint,
+      });
+    } finally {
+      this.captureDepth -= 1;
+    }
+
+    return eventId;
+  }
+
   private scheduleProcess(input: {
     type: 'exception' | 'message';
     level: SeverityLevel;
     message?: string;
-    exception?: ReturnType<typeof normalizeException>;
+    exception?: ReturnType<typeof prepareExceptionCapture>['exception'];
     hint?: CaptureHint;
     scope: ReturnType<Scope['snapshot']>;
     eventId: string;
   }): void {
-    // Defer heavy work off the call stack (Promise microtask; no queueMicrotask for ES2017).
     void Promise.resolve().then(() => {
       safeRun(() => {
         void this.processEvent(input);
@@ -313,7 +458,7 @@ export class HealStackClient {
     type: 'exception' | 'message';
     level: SeverityLevel;
     message?: string;
-    exception?: ReturnType<typeof normalizeException>;
+    exception?: ReturnType<typeof prepareExceptionCapture>['exception'];
     hint?: CaptureHint;
     scope: ReturnType<Scope['snapshot']>;
     eventId: string;
@@ -324,13 +469,13 @@ export class HealStackClient {
 
     this.processing = true;
     try {
-      // Sampling
       if (this.options.sampleRate < 1 && Math.random() > this.options.sampleRate) {
         debug('event dropped by sampleRate');
         return;
       }
 
-      let event = normalizeEvent({
+      // Raw → Normalize → Validate
+      const normalized = normalizeAndValidate({
         type: input.type,
         level: input.level,
         scope: input.scope,
@@ -343,43 +488,45 @@ export class HealStackClient {
         ...(this.options.dist !== undefined ? { dist: this.options.dist } : {}),
       });
 
-      // beforeSend (hostile user code)
-      const beforeSend = this.options.beforeSend;
-      if (beforeSend) {
-        const result = await safeAsyncWithTimeout(
-          async () => beforeSend(event, input.hint ?? { originalException: undefined }),
-          null,
-          'beforeSend',
-          2_000,
-        );
-        if (result === null) {
-          debug('event dropped by beforeSend');
-          return;
-        }
-        if (!result || typeof result !== 'object' || typeof result.event_id !== 'string') {
-          debug('event dropped: beforeSend returned invalid event');
-          return;
-        }
-        event = result;
+      if (!normalized) {
+        debug('event dropped: invalid after normalize');
+        return;
       }
 
-      // Sanitize after beforeSend so hooks cannot reintroduce secrets.
-      event = sanitizeEvent(event, {
+      let event = normalized;
+
+      // Optional beforeSend (between validate and sanitize)
+      const beforeSendResult = await applyBeforeSend(
+        event,
+        this.options.beforeSend,
+        input.hint ?? { originalException: undefined },
+      );
+      if (beforeSendResult.action === 'discard') {
+        debug(`event dropped by beforeSend (${beforeSendResult.reason})`);
+        return;
+      }
+      event = beforeSendResult.event;
+
+      // Sanitize → Validate → Size check
+      const finalized = finalizeEvent(event, {
+        maxEventSize: this.options.maxEventSize,
         sendDefaultPii: this.options.sendDefaultPii,
         scrubFields: this.options.scrubFields,
       });
 
-      const bytes = jsonByteLength(event);
-      if (bytes > this.options.maxEventSize) {
-        debug(`event dropped: size ${bytes} exceeds maxEventSize ${this.options.maxEventSize}`);
+      if (!finalized.ok) {
+        debug(
+          `event dropped: ${finalized.reason}${finalized.message ? ` (${finalized.message})` : ''}`,
+        );
         return;
       }
 
-      this.queue.enqueue(event);
+      await this.queue.enqueue(finalized.event);
 
-      // Immediate flush for fatal events
-      if (event.level === 'fatal' || this.queue.size >= this.options.maxBatchSize) {
-        void this.flush();
+      if (
+        shouldFlushAfterEnqueue(this.queue.size, this.options.maxBatchSize, finalized.event.level)
+      ) {
+        this.delivery.onEnqueued(true);
       }
     } catch (error) {
       handleInternalError(error, 'processEvent');
@@ -387,82 +534,6 @@ export class HealStackClient {
       this.processing = false;
     }
   }
-
-  private async runFlush(timeoutMs: number): Promise<boolean> {
-    const deadline = Date.now() + Math.max(0, timeoutMs);
-
-    while (!this.queue.isEmpty()) {
-      if (Date.now() > deadline) {
-        return false;
-      }
-      if (this.transportDisabled) {
-        this.queue.clear();
-        return true;
-      }
-
-      const batch = this.queue.drain(this.options.maxBatchSize);
-      if (batch.length === 0) {
-        return true;
-      }
-
-      const discarded = this.queue.takeDiscardedCount();
-      const result = await safeAsync(
-        async () =>
-          this.transport.send({
-            events: batch,
-            discardedEvents: discarded,
-          }),
-        { status: 'network_error' as const, message: 'transport failed' },
-        'transport.send',
-      );
-
-      if (result.status === 'accepted') {
-        continue;
-      }
-
-      if (result.status === 'unauthorized') {
-        this.transportDisabled = true;
-        debug('transport disabled after unauthorized response');
-        return false;
-      }
-
-      if (result.status === 'malformed' || result.status === 'too_large') {
-        // Drop permanent failures for this batch.
-        debug(`dropping batch after ${result.status}`);
-        continue;
-      }
-
-      // Transient failure — requeue and stop this flush attempt.
-      for (const event of batch) {
-        this.queue.enqueue(event);
-      }
-      return false;
-    }
-
-    return true;
-  }
-}
-
-function prepareBreadcrumb(input: BreadcrumbInput): Breadcrumb {
-  const crumb: Breadcrumb = {
-    timestamp: input.timestamp ?? nowIso(),
-  };
-  if (input.type !== undefined) {
-    crumb.type = input.type;
-  }
-  if (input.category !== undefined) {
-    crumb.category = input.category;
-  }
-  if (input.message !== undefined) {
-    crumb.message = input.message;
-  }
-  if (input.level !== undefined) {
-    crumb.level = input.level;
-  }
-  if (input.data !== undefined) {
-    crumb.data = { ...input.data };
-  }
-  return crumb;
 }
 
 function safeHost(endpoint: string): string {

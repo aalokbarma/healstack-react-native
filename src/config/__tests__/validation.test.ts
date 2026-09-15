@@ -78,6 +78,7 @@ describe('config validation', () => {
       expect(resolved).not.toBeNull();
       expect(resolved?.apiKey).toBe('hs_live_abcdefghij');
       expect(resolved?.endpoint).toBe('https://api.healstack.dev');
+      expect(resolved?.allowHttp).toBe(false);
       expect(resolved?.enabled).toBe(true);
       expect(resolved?.debug).toBe(false);
       expect(resolved?.maxQueueSize).toBe(100);
@@ -177,6 +178,16 @@ describe('config validation', () => {
     it('allows maxRetries of 0', () => {
       const resolved = resolveOptions({ ...valid, maxRetries: 0 });
       expect(resolved?.maxRetries).toBe(0);
+    });
+
+    it('accepts allowHttp for local http endpoints', () => {
+      const resolved = resolveOptions({
+        ...valid,
+        endpoint: 'http://localhost:8787',
+        allowHttp: true,
+      });
+      expect(resolved?.allowHttp).toBe(true);
+      expect(resolved?.endpoint).toBe('http://localhost:8787');
     });
 
     it('strips trailing slashes from endpoint', () => {

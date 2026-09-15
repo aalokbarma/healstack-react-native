@@ -3,6 +3,7 @@
  */
 
 import type { ScopeSnapshot } from '../context/Scope';
+import { getRuntimeContexts } from '../context/runtime';
 import type { EventContexts, ExceptionValue, HealStackEvent } from '../types/events';
 import type { CaptureHint, SeverityLevel } from '../types/public';
 import { nowIso } from '../utils/time';
@@ -23,6 +24,12 @@ export interface NormalizeEventInput {
   eventId?: string;
 }
 
+/**
+ * Build a wire-ready HealStackEvent from capture inputs + scope.
+ *
+ * Guarantees required fields: event_id, timestamp, type, level, sdk.
+ * Nested values are depth/cycle-bounded via normalizeValue.
+ */
 export function normalizeEvent(input: NormalizeEventInput): HealStackEvent {
   const eventId = input.eventId ?? input.hint?.event_id ?? uuidv4();
 
@@ -35,7 +42,7 @@ export function normalizeEvent(input: NormalizeEventInput): HealStackEvent {
     sdk: { name: SDK_NAME, version: SDK_VERSION },
   };
 
-  // schema_version is on the envelope; keep event lean.
+  // schema_version is on the ingest envelope; keep the event lean.
   void SCHEMA_VERSION;
 
   if (input.release !== undefined) {
@@ -60,11 +67,25 @@ export function normalizeEvent(input: NormalizeEventInput): HealStackEvent {
   }
 
   if (Object.keys(input.scope.extra).length > 0) {
-    event.extra = normalizeValue(input.scope.extra) as Record<string, unknown>;
+    const extra = normalizeValue(input.scope.extra);
+    if (extra !== undefined && extra !== null && typeof extra === 'object') {
+      event.extra = extra as Record<string, unknown>;
+    }
   }
 
-  if (Object.keys(input.scope.contexts).length > 0) {
-    event.contexts = normalizeValue(input.scope.contexts) as EventContexts;
+  const runtimeContexts = getRuntimeContexts();
+  const scopeContexts =
+    Object.keys(input.scope.contexts).length > 0
+      ? (normalizeValue(input.scope.contexts) as EventContexts)
+      : {};
+  const mergedContexts: EventContexts = { ...runtimeContexts, ...scopeContexts };
+  if (Object.keys(mergedContexts).length > 0) {
+    event.contexts = mergedContexts;
+  }
+
+  // Ensure app context is present when runtime provided one (or empty merge).
+  if (event.contexts?.app === undefined && runtimeContexts.app) {
+    event.contexts = { ...event.contexts, app: runtimeContexts.app };
   }
 
   if (input.scope.breadcrumbs.length > 0) {

@@ -12,12 +12,30 @@ import HealStack, {
   lastEventId,
   setContext,
   setExtra,
+  clearTag,
+  clearTags,
+  clearUser,
   setTag,
   setTags,
   setUser,
 } from '../index';
 
 describe('public API', () => {
+  let fetchSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    fetchSpy = jest.spyOn(globalThis as { fetch: typeof fetch }, 'fetch').mockResolvedValue({
+      status: 202,
+      ok: true,
+      headers: { get: () => null },
+    } as unknown as Response);
+  });
+
+  afterEach(async () => {
+    await close();
+    fetchSpy.mockRestore();
+  });
+
   it('exposes a default namespace export', () => {
     expect(HealStack).toBeDefined();
     expect(typeof HealStack.init).toBe('function');
@@ -35,8 +53,11 @@ describe('public API', () => {
     expect(typeof captureMessage).toBe('function');
     expect(typeof addBreadcrumb).toBe('function');
     expect(typeof setUser).toBe('function');
+    expect(typeof clearUser).toBe('function');
     expect(typeof setTag).toBe('function');
     expect(typeof setTags).toBe('function');
+    expect(typeof clearTag).toBe('function');
+    expect(typeof clearTags).toBe('function');
     expect(typeof setExtra).toBe('function');
     expect(typeof setContext).toBe('function');
     expect(typeof flush).toBe('function');
@@ -57,7 +78,10 @@ describe('public API', () => {
     expect(() => addBreadcrumb({ message: 'nav', type: 'navigation' })).not.toThrow();
     expect(() => setUser({ id: '1' })).not.toThrow();
     expect(() => setTag('feature', 'payments')).not.toThrow();
-    expect(() => setTags({ a: 1 })).not.toThrow();
+    expect(() => setTags({ a: '1' })).not.toThrow();
+    expect(() => clearUser()).not.toThrow();
+    expect(() => clearTag('a')).not.toThrow();
+    expect(() => clearTags()).not.toThrow();
     expect(() => setExtra('k', { nested: true })).not.toThrow();
     expect(() => setContext('cart', { items: 2 })).not.toThrow();
     await expect(flush()).resolves.toBe(true);

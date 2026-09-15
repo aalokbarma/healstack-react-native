@@ -7,6 +7,9 @@
 declare function setTimeout(handler: () => void, timeout?: number): unknown;
 declare function clearTimeout(handle?: unknown): void;
 
+/** CommonJS require — used for optional react-native load in platform layer. */
+declare function require(id: string): unknown;
+
 interface HealStackConsole {
   debug(...data: unknown[]): void;
   info(...data: unknown[]): void;
@@ -44,6 +47,8 @@ declare class AbortController {
 
 interface AbortSignal {
   readonly aborted: boolean;
+  addEventListener?(type: 'abort', listener: () => void): void;
+  removeEventListener?(type: 'abort', listener: () => void): void;
 }
 
 interface Response {
@@ -52,6 +57,8 @@ interface Response {
   readonly headers: {
     get(name: string): string | null;
   };
+  text?(): Promise<string>;
+  json?(): Promise<unknown>;
 }
 
 declare function fetch(
@@ -63,3 +70,13 @@ declare function fetch(
     signal?: AbortSignal;
   },
 ): Promise<Response>;
+
+/** Minimal Intl for locale collection in Node/Hermes. */
+declare namespace Intl {
+  function DateTimeFormat(
+    locales?: string | string[],
+    options?: Record<string, unknown>,
+  ): {
+    resolvedOptions(): { locale?: string };
+  };
+}

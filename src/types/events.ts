@@ -54,6 +54,10 @@ export interface DeviceContext {
 export interface AppContext {
   state?: string;
   build_type?: 'development' | 'production' | (string & {});
+  /** Native app version when explicitly available (never auto-read from contacts/location). */
+  version?: string;
+  /** BCP-47 locale tag from Intl when available. */
+  locale?: string;
 }
 
 export interface RuntimeContext {
@@ -79,13 +83,20 @@ export interface SdkInfo {
 
 /**
  * A single normalized HealStack event ready for transmission.
+ *
+ * Required on every event: `event_id`, `timestamp`, `type`, `level`, `sdk`.
  * Optional fields use `?` (not `| undefined`) for exactOptionalPropertyTypes.
  */
 export interface HealStackEvent {
+  /** Unique event identifier (UUID v4). */
   event_id: string;
+  /** Event kind: exception | message | … */
   type: EventType;
+  /** ISO-8601 UTC timestamp. */
   timestamp: string;
   level: SeverityLevel;
+  /** Always present after normalization. */
+  sdk: SdkInfo;
   environment?: string;
   release?: string;
   dist?: string;
@@ -96,7 +107,6 @@ export interface HealStackEvent {
   extra?: Record<string, unknown>;
   contexts?: EventContexts;
   breadcrumbs?: Breadcrumb[];
-  sdk?: SdkInfo;
   fingerprint?: string[];
 }
 

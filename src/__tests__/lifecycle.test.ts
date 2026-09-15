@@ -8,16 +8,24 @@ describe('init / close lifecycle', () => {
     endpoint: 'https://api.healstack.dev',
   };
 
+  let fetchSpy: jest.SpyInstance;
+
   beforeEach(async () => {
     await close();
     resetClientRegistry();
     resetLogger();
+    fetchSpy = jest.spyOn(globalThis as { fetch: typeof fetch }, 'fetch').mockResolvedValue({
+      status: 202,
+      ok: true,
+      headers: { get: () => null },
+    } as unknown as Response);
   });
 
   afterEach(async () => {
     await close();
     resetClientRegistry();
     resetLogger();
+    fetchSpy.mockRestore();
   });
 
   it('initializes with valid configuration', () => {

@@ -25,8 +25,8 @@ export class EventQueue {
   private discarded = 0;
 
   constructor(
-    private maxEvents: number,
-    private maxBytes: number,
+    private readonly maxEvents: number,
+    private readonly maxBytes: number,
   ) {}
 
   get size(): number {
@@ -43,16 +43,21 @@ export class EventQueue {
     return n;
   }
 
-  enqueue(event: HealStackEvent): boolean {
+  enqueue(event: HealStackEvent, enqueuedAt = Date.now()): boolean {
     const bytes = jsonByteLength(event);
     if (bytes <= 0) {
       this.discarded += 1;
       return false;
     }
 
-    this.items.push({ event, bytes, enqueuedAt: Date.now() });
+    this.items.push({ event, bytes, enqueuedAt });
     this.evictIfNeeded();
     return this.items.some((item) => item.event.event_id === event.event_id);
+  }
+
+  /** Remove and return up to `limit` events (FIFO). */
+  dequeue(limit = 1): HealStackEvent[] {
+    return this.drain(limit);
   }
 
   /** Drain up to `limit` events (FIFO among remaining). */
@@ -62,8 +67,23 @@ export class EventQueue {
     return batch.map((item) => item.event);
   }
 
+  /** Peek at the oldest event without removing it. */
+  peek(): HealStackEvent | undefined {
+    return this.items[0]?.event;
+  }
+
   peekAll(): HealStackEvent[] {
     return this.items.map((item) => item.event);
+  }
+
+  /** Remove a specific event by id. Returns true if found. */
+  remove(eventId: string): boolean {
+    const index = this.items.findIndex((item) => item.event.event_id === eventId);
+    if (index < 0) {
+      return false;
+    }
+    this.items.splice(index, 1);
+    return true;
   }
 
   clear(): void {
@@ -74,8 +94,21 @@ export class EventQueue {
     return this.items.length === 0;
   }
 
-  private totalBytes(): number {
+  /** Snapshot for persistence (oldest → newest). */
+  snapshot(): QueuedEvent[] {
+    return this.items.map((item) => ({
+      event: item.event,
+      bytes: item.bytes,
+      enqueuedAt: item.enqueuedAt,
+    }));
+  }
+
+  totalBytes(): number {
     return this.items.reduce((sum, item) => sum + item.bytes, 0);
+  }
+
+  getMaxBytes(): number {
+    return this.maxBytes;
   }
 
   private evictIfNeeded(): void {
@@ -84,7 +117,6 @@ export class EventQueue {
       (this.maxBytes > 0 && this.totalBytes() > this.maxBytes)
     ) {
       if (this.items.length <= 1) {
-        // Keep the newest event if somehow a single event exceeds byte budget.
         if (this.totalBytes() > this.maxBytes && this.items.length === 1) {
           this.items.shift();
           this.discarded += 1;

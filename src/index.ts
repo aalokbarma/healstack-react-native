@@ -5,6 +5,7 @@
  */
 
 import { closeClient, getClient, initClient, isClientInitialized } from './client/clientRegistry';
+import { createAsyncStorageAdapter, MemoryStorage } from './storage';
 import { WIRE_SCHEMA_VERSION } from './types/api';
 import type {
   BreadcrumbInput,
@@ -28,6 +29,9 @@ export type {
   TagValue,
   UserContext,
 } from './types/public';
+
+export { createAsyncStorageAdapter, MemoryStorage } from './storage';
+export type { Storage, AsyncStorageLike } from './storage';
 
 export type {
   AppContext,
@@ -108,6 +112,17 @@ export function setUser(user: UserContext | null): void {
   );
 }
 
+/** Clear the current user context from scope. */
+export function clearUser(): void {
+  safe(
+    () => {
+      getClient()?.clearUser();
+    },
+    undefined,
+    'clearUser',
+  );
+}
+
 export function setTag(key: string, value: TagValue): void {
   safe(
     () => {
@@ -125,6 +140,28 @@ export function setTags(tags: Record<string, TagValue>): void {
     },
     undefined,
     'setTags',
+  );
+}
+
+/** Remove a single tag by key. */
+export function clearTag(key: string): void {
+  safe(
+    () => {
+      getClient()?.clearTag(key);
+    },
+    undefined,
+    'clearTag',
+  );
+}
+
+/** Remove all tags from scope. */
+export function clearTags(): void {
+  safe(
+    () => {
+      getClient()?.clearTags();
+    },
+    undefined,
+    'clearTags',
   );
 }
 
@@ -184,13 +221,18 @@ const HealStack = {
   captureMessage,
   addBreadcrumb,
   setUser,
+  clearUser,
   setTag,
   setTags,
+  clearTag,
+  clearTags,
   setExtra,
   setContext,
   flush,
   close,
   lastEventId,
+  createAsyncStorageAdapter,
+  MemoryStorage,
   SDK_NAME,
   SDK_VERSION,
   SCHEMA_VERSION,

@@ -20,8 +20,20 @@ export type BreadcrumbType =
   | 'user'
   | (string & {});
 
-export type TagValue = string | number | boolean;
+/** Tag values are always strings on the wire. */
+export type TagValue = string;
 
+/**
+ * Optional user context attached to events.
+ *
+ * Only fields you set explicitly are included — the SDK never reads contacts,
+ * messages, photos, precise location, or other device data automatically.
+ *
+ * **Privacy:** You are responsible for ensuring a lawful basis before sending
+ * personal data. Use `sendDefaultPii: false` (default) to strip email/username
+ * at transmission, `scrubFields` for custom redaction, and `beforeSend` to
+ * inspect or drop events.
+ */
 export interface UserContext {
   id?: string;
   email?: string;
@@ -77,6 +89,11 @@ export interface HealStackOptions {
   apiKey: string;
   /** Ingest base URL, e.g. `https://api.healstack.dev`. */
   endpoint: string;
+  /**
+   * Allow plain `http://` endpoints (local development only).
+   * Production must use HTTPS. Default false.
+   */
+  allowHttp?: boolean;
   /** Deployment environment label. */
   environment?: string;
   /** App release identifier, e.g. `com.acme.app@1.4.2`. */
@@ -96,8 +113,12 @@ export interface HealStackOptions {
   enableDeduplication?: boolean;
   attachStacktraceToMessages?: boolean;
 
-  /** Max breadcrumbs retained. Default 50. */
+  /** Max breadcrumbs retained (FIFO). Default 50. */
   maxBreadcrumbs?: number;
+  /** Max breadcrumb message length in characters. Default 1024. */
+  maxBreadcrumbMessageSize?: number;
+  /** Max tags retained on scope. Default 50. */
+  maxTags?: number;
   /** Max queued events (count). Default 100. */
   maxQueueSize?: number;
   /** Max single event size in bytes. Default 200 KiB. */
@@ -110,14 +131,30 @@ export interface HealStackOptions {
   flushInterval?: number;
   /** HTTP request timeout in milliseconds. Default 15000. */
   requestTimeout?: number;
-  /** Max delivery retries per batch. Default 5. */
+  /**
+   * Max delivery retries after the first attempt per batch (transient failures only).
+   * Default 5.
+   */
   maxRetries?: number;
   /** Drop persisted events older than this (ms). Default 24h. */
   maxEventAgeMs?: number;
 
+  /**
+   * When false (default), strip email / username / ip_address from user context
+   * before transmission. Does not strip `id`.
+   */
   sendDefaultPii?: boolean;
+  /**
+   * Extra field names to redact (merged with the built-in sensitive-key list).
+   * Matching is case-insensitive and ignores `-` / `_` separators.
+   */
   scrubFields?: string[];
 
+  /**
+   * Called after normalization and before default sanitization.
+   * Return a modified event, remove fields, or return `null` to discard.
+   * Throws / rejections discard the event and never crash the app.
+   */
   beforeSend?: (
     event: HealStackEvent,
     hint: CaptureHint,

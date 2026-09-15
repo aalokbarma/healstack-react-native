@@ -1,29 +1,44 @@
 /**
- * Key-pattern deny list for PII / secret redaction.
+ * Default sensitive-key deny list and matching helpers.
+ *
+ * Keys are compared after normalizing to lowercase with separators removed,
+ * so `accessToken`, `access_token`, and `Access-Token` all match.
+ *
+ * This is intentionally conservative and incomplete — it does not catch every
+ * sensitive value. Prefer `scrubFields` and `beforeSend` for app-specific data.
  */
 
-const DEFAULT_DENY = [
+/** Built-in deny patterns (pre-normalization forms accepted). */
+export const DEFAULT_SENSITIVE_KEYS = [
   'password',
   'passwd',
   'secret',
   'token',
+  'accessToken',
+  'access_token',
+  'refreshToken',
+  'refresh_token',
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'set_cookie',
+  'creditCard',
+  'credit_card',
+  'cardNumber',
+  'card_number',
+  'cvv',
+  // Additional common secrets
   'api_key',
   'apikey',
-  'authorization',
   'auth',
   'credential',
   'session',
-  'cookie',
   'csrf',
   'private_key',
   'access_key',
-  'refresh_token',
-  'credit_card',
-  'card_number',
-  'cvv',
   'ssn',
   'pin',
-];
+] as const;
 
 export function normalizeKey(key: string): string {
   return key.toLowerCase().replace(/[-_\s]/g, '');
@@ -31,7 +46,7 @@ export function normalizeKey(key: string): string {
 
 export function buildDenySet(extraFields: string[] = []): Set<string> {
   const set = new Set<string>();
-  for (const key of DEFAULT_DENY) {
+  for (const key of DEFAULT_SENSITIVE_KEYS) {
     set.add(normalizeKey(key));
   }
   for (const key of extraFields) {

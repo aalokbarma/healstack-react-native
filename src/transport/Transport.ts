@@ -8,6 +8,8 @@ import type { IngestStatus } from '../types/api';
 export interface TransportRequest {
   events: HealStackEvent[];
   discardedEvents: number;
+  /** Optional external cancellation signal. */
+  signal?: AbortSignal;
 }
 
 export interface TransportResult {
@@ -15,8 +17,14 @@ export interface TransportResult {
   httpStatus?: number;
   retryAfterMs?: number;
   message?: string;
+  /** How many attempts were made (including the final one). */
+  attempts?: number;
 }
 
+/**
+ * Delivery backend for batched HealStack events.
+ * Implementations must never throw into application code.
+ */
 export interface Transport {
   send(request: TransportRequest): Promise<TransportResult>;
 }

@@ -2,12 +2,16 @@
  * Default configuration values and hard safety caps.
  */
 
+import { BREADCRUMB_DEFAULTS, BREADCRUMB_HARD_CAPS } from '../breadcrumbs/constants';
+import { METADATA_DEFAULTS, METADATA_HARD_CAPS } from '../metadata/constants';
 import { defaultEnvironment } from '../utils/environment';
 import type { HardCaps, ResolvedOptions, SoftMinimums } from './types';
 
 /** Absolute upper bounds — values above these are clamped. */
 export const HARD_CAPS: HardCaps = {
   maxBreadcrumbs: 200,
+  maxBreadcrumbMessageSize: BREADCRUMB_HARD_CAPS.maxMessageSize,
+  maxTags: METADATA_HARD_CAPS.maxTags,
   maxQueueSize: 500,
   maxEventSize: 512 * 1024, // 512 KiB
   maxQueueBytes: 2 * 1024 * 1024, // 2 MiB
@@ -33,6 +37,7 @@ export const SOFT_MINIMUMS: SoftMinimums = {
  */
 export function createDefaultResolvedOptions(): Omit<ResolvedOptions, 'apiKey' | 'endpoint'> {
   return {
+    allowHttp: false,
     environment: defaultEnvironment(),
     release: undefined,
     dist: undefined,
@@ -45,6 +50,8 @@ export function createDefaultResolvedOptions(): Omit<ResolvedOptions, 'apiKey' |
     enableDeduplication: true,
     attachStacktraceToMessages: true,
     maxBreadcrumbs: 50,
+    maxBreadcrumbMessageSize: BREADCRUMB_DEFAULTS.maxMessageSize,
+    maxTags: METADATA_DEFAULTS.maxTags,
     maxQueueSize: 100,
     maxEventSize: 200 * 1024, // 200 KiB
     maxQueueBytes: 1 * 1024 * 1024, // 1 MiB

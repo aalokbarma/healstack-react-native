@@ -2,8 +2,7 @@
  * Per-client mutable scope (user, tags, extras, contexts, breadcrumbs).
  */
 
-import type { Breadcrumb, BreadcrumbInput, TagValue, UserContext } from '../types/public';
-import { nowIso } from '../utils/time';
+import type { Breadcrumb, TagValue, UserContext } from '../types/public';
 import { BreadcrumbBuffer } from './breadcrumbs';
 
 export interface ScopeSnapshot {
@@ -20,17 +19,30 @@ export class Scope {
   private readonly extra: Record<string, unknown> = {};
   private readonly contexts: Record<string, Record<string, unknown>> = {};
   private readonly breadcrumbs: BreadcrumbBuffer;
+  private readonly maxTags: number;
 
-  constructor(maxBreadcrumbs: number) {
+  constructor(maxBreadcrumbs: number, maxTags: number) {
     this.breadcrumbs = new BreadcrumbBuffer(maxBreadcrumbs);
+    this.maxTags = Math.max(0, maxTags);
   }
 
-  setUser(user: UserContext | null): void {
-    this.user = user === null ? undefined : { ...user };
+  setUser(user: UserContext | undefined): void {
+    this.user = user;
+  }
+
+  clearUser(): void {
+    this.user = undefined;
   }
 
   setTag(key: string, value: TagValue): void {
-    if (typeof key !== 'string' || key.length === 0) {
+    if (this.maxTags <= 0) {
+      return;
+    }
+    if (key in this.tags) {
+      this.tags[key] = value;
+      return;
+    }
+    if (Object.keys(this.tags).length >= this.maxTags) {
       return;
     }
     this.tags[key] = value;
@@ -39,6 +51,19 @@ export class Scope {
   setTags(tags: Record<string, TagValue>): void {
     for (const [key, value] of Object.entries(tags)) {
       this.setTag(key, value);
+    }
+  }
+
+  clearTag(key: string): void {
+    if (typeof key !== 'string' || key.length === 0) {
+      return;
+    }
+    delete this.tags[key];
+  }
+
+  clearTags(): void {
+    for (const key of Object.keys(this.tags)) {
+      delete this.tags[key];
     }
   }
 
@@ -60,29 +85,6 @@ export class Scope {
     this.contexts[key] = { ...context };
   }
 
-  addBreadcrumb(input: BreadcrumbInput): void {
-    const breadcrumb: Breadcrumb = {
-      timestamp: input.timestamp ?? nowIso(),
-    };
-    if (input.type !== undefined) {
-      breadcrumb.type = input.type;
-    }
-    if (input.category !== undefined) {
-      breadcrumb.category = input.category;
-    }
-    if (input.message !== undefined) {
-      breadcrumb.message = input.message;
-    }
-    if (input.level !== undefined) {
-      breadcrumb.level = input.level;
-    }
-    if (input.data !== undefined) {
-      breadcrumb.data = { ...input.data };
-    }
-    this.breadcrumbs.add(breadcrumb);
-  }
-
-  /** Apply beforeBreadcrumb-style transform result. */
   addPreparedBreadcrumb(breadcrumb: Breadcrumb): void {
     this.breadcrumbs.add(breadcrumb);
   }
@@ -102,10 +104,8 @@ export class Scope {
   }
 
   clear(): void {
-    this.user = undefined;
-    for (const key of Object.keys(this.tags)) {
-      delete this.tags[key];
-    }
+    this.clearUser();
+    this.clearTags();
     for (const key of Object.keys(this.extra)) {
       delete this.extra[key];
     }

@@ -13,6 +13,8 @@ export type { HealStackOptions, HealStackStorage };
 export interface ResolvedOptions {
   apiKey: string;
   endpoint: string;
+  /** When true, `http://` endpoints are allowed (local development only). */
+  allowHttp: boolean;
   environment: string;
   release: string | undefined;
   dist: string | undefined;
@@ -25,6 +27,8 @@ export interface ResolvedOptions {
   enableDeduplication: boolean;
   attachStacktraceToMessages: boolean;
   maxBreadcrumbs: number;
+  maxBreadcrumbMessageSize: number;
+  maxTags: number;
   maxQueueSize: number;
   maxEventSize: number;
   maxQueueBytes: number;
@@ -44,6 +48,8 @@ export interface ResolvedOptions {
 
 export interface HardCaps {
   maxBreadcrumbs: number;
+  maxBreadcrumbMessageSize: number;
+  maxTags: number;
   maxQueueSize: number;
   maxEventSize: number;
   maxQueueBytes: number;

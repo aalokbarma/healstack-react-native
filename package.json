@@ -37,6 +37,16 @@
         "default": "./lib/commonjs/index.js"
       }
     },
+    "./async-storage": {
+      "import": {
+        "types": "./lib/typescript/module/async-storage.d.ts",
+        "default": "./lib/module/async-storage.js"
+      },
+      "require": {
+        "types": "./lib/typescript/commonjs/async-storage.d.ts",
+        "default": "./lib/commonjs/async-storage.js"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [

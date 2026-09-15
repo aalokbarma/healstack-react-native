@@ -224,6 +224,18 @@ export function resolveOptions(raw: unknown): ResolvedOptions | null {
 
   const apiKey = options.apiKey.trim();
   const endpoint = options.endpoint.trim().replace(/\/+$/, '');
+  const allowHttp = asBoolean(options.allowHttp, defaults.allowHttp, 'allowHttp');
+
+  try {
+    const endpointUrl = new URL(endpoint);
+    if (endpointUrl.protocol === 'http:' && !allowHttp) {
+      warn(
+        'endpoint uses http://; HTTPS is required unless allowHttp: true (local development only)',
+      );
+    }
+  } catch {
+    // Already validated by isValidEndpoint.
+  }
 
   let storage: ResolvedOptions['storage'] = defaults.storage;
   if (options.storage === 'memory' || options.storage === 'auto') {
@@ -237,6 +249,7 @@ export function resolveOptions(raw: unknown): ResolvedOptions | null {
   const resolved: ResolvedOptions = {
     apiKey,
     endpoint,
+    allowHttp,
     environment,
     release: asOptionalString(options.release, 'release'),
     dist: asOptionalString(options.dist, 'dist'),
@@ -275,6 +288,14 @@ export function resolveOptions(raw: unknown): ResolvedOptions | null {
       HARD_CAPS.maxBreadcrumbs,
       'maxBreadcrumbs',
     ),
+    maxBreadcrumbMessageSize: clampNumber(
+      options.maxBreadcrumbMessageSize,
+      defaults.maxBreadcrumbMessageSize,
+      0,
+      HARD_CAPS.maxBreadcrumbMessageSize,
+      'maxBreadcrumbMessageSize',
+    ),
+    maxTags: clampNumber(options.maxTags, defaults.maxTags, 0, HARD_CAPS.maxTags, 'maxTags'),
     maxQueueSize: clampNumber(
       options.maxQueueSize,
       defaults.maxQueueSize,
@@ -359,6 +380,7 @@ export function optionsFingerprint(options: ResolvedOptions): string {
   return JSON.stringify({
     apiKey: options.apiKey,
     endpoint: options.endpoint,
+    allowHttp: options.allowHttp,
     environment: options.environment,
     release: options.release ?? null,
     dist: options.dist ?? null,
@@ -366,6 +388,8 @@ export function optionsFingerprint(options: ResolvedOptions): string {
     debug: options.debug,
     sampleRate: options.sampleRate,
     maxBreadcrumbs: options.maxBreadcrumbs,
+    maxBreadcrumbMessageSize: options.maxBreadcrumbMessageSize,
+    maxTags: options.maxTags,
     maxQueueSize: options.maxQueueSize,
     maxEventSize: options.maxEventSize,
     maxQueueBytes: options.maxQueueBytes,
